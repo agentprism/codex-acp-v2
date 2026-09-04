@@ -22,6 +22,10 @@ impl Client {
     }
 
     async fn start_with_timeout(negotiated: bool, timeout: &str) -> Self {
+        Self::start_fixture(negotiated, timeout, "server").await
+    }
+
+    async fn start_fixture(negotiated: bool, timeout: &str, scenario: &str) -> Self {
         let python = if cfg!(windows) { "python" } else { "python3" };
         assert!(
             Command::new(python)
@@ -40,7 +44,7 @@ impl Client {
             "--codex-arg",
             concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/codex_peer.py"),
             "--codex-arg",
-            "server",
+            scenario,
             "--request-timeout-seconds",
             timeout,
             "--interaction-timeout-seconds",
@@ -175,6 +179,87 @@ fn current(options: &Value, id: &str) -> Value {
         .find(|option| option["configId"] == id)
         .unwrap()["currentValue"]
         .clone()
+}
+
+#[tokio::test]
+async fn slow_replay_does_not_block_another_sessions_events_or_prompt() {
+    let mut client = Client::start_fixture(true, "5", "parallel").await;
+    let first = client.new_session(Value::Null).await;
+    let second = client.new_session(Value::Null).await;
+    client
+        .rpc("session/close", json!({"sessionId":first}))
+        .await;
+    client.send(json!({"jsonrpc":"2.0","id":100,"method":"session/resume","params":{"sessionId":first,"cwd":client.directory.path(),"mcpServers":[],"replayFrom":{"type":"start"}}})).await;
+    // The fixture holds the history response while a same-session notification
+    // waits behind replay. The second session must still receive its events.
+    tokio::time::timeout(
+        Duration::from_secs(1),
+        client.matching(|frame| {
+            frame["method"] == "_codex/event"
+                && frame["params"]["method"] == "fixture/replayBlocked"
+        }),
+    )
+    .await
+    .expect("one session's replay blocked the connection event pump");
+    client
+        .rpc(
+            "session/prompt",
+            json!({"sessionId":second,"prompt":[{"type":"text","text":"work during replay"}]}),
+        )
+        .await;
+    let finished = tokio::time::timeout(
+        Duration::from_secs(1),
+        client.matching(|frame| is_state(frame, "idle") && frame["params"]["sessionId"] == second),
+    )
+    .await
+    .expect("independent session did not finish before replay was released");
+    assert_eq!(finished["params"]["update"]["stopReason"], "end_turn");
+    client
+        .rpc(
+            "_codex/request",
+            json!({"version":1,"method":"model/list","params":{}}),
+        )
+        .await;
+    let resumed = client
+        .matching(|frame| frame["id"] == 100 && frame.get("method").is_none())
+        .await;
+    assert!(resumed.get("error").is_none());
+    let replay = client
+        .matching(|frame| {
+            frame["params"]["sessionId"] == first
+                && frame["params"]["update"]["messageId"] == "saved-message"
+        })
+        .await;
+    assert_eq!(
+        replay["params"]["update"]["content"],
+        json!([{"type":"text","text":"retained history"}])
+    );
+    let output = client
+        .matching(|frame| frame["params"]["update"]["sessionUpdate"] == "terminal_output_chunk")
+        .await;
+    assert_eq!(
+        output["params"]["update"]["data"], "YWZ0ZXIK",
+        "pre-snapshot output must not append twice, but post-snapshot background output must survive"
+    );
+    let interaction = client
+        .matching(|frame| frame["params"]["update"]["sessionUpdate"] == "tool_call_content_chunk")
+        .await;
+    assert_eq!(
+        interaction["params"]["update"]["content"]["content"]["text"],
+        "Input sent to process background: input not represented by history"
+    );
+    let raw = client
+        .matching(|frame| {
+            frame["method"] == "_codex/event"
+                && frame["params"]["method"] == "item/commandExecution/outputDelta"
+                && frame["params"]["params"]["delta"] == "before\n"
+        })
+        .await;
+    assert_eq!(
+        raw["params"]["sessionId"], first,
+        "native snapshot reconciliation must preserve the raw event stream"
+    );
+    client.shutdown().await;
 }
 
 #[tokio::test]
@@ -345,6 +430,14 @@ async fn history_mutations_publish_reset_boundaries_and_authoritative_replay() {
                 "_codex/request",
                 json!({"version":1,"sessionId":id,"method":method,"params":params}),
             )
+            .await;
+        // The fixture re-emits the deleted final snapshot immediately before the
+        // mutation response. Wait for raw delivery to prove native filtering has
+        // run before inspecting the rebuilt transcript.
+        client
+            .matching(|frame| {
+                frame["method"] == "_codex/event" && frame["params"]["method"] == "item/completed"
+            })
             .await;
         let boundaries: Vec<_> = client
             .backlog

@@ -146,10 +146,11 @@ impl Server {
         let session = state
             .sessions
             .entry(id.clone())
-            .or_insert_with(|| Arc::new(Session::new(Configuration::default())))
+            .or_insert_with(|| Arc::new(Session::new(id.clone(), Configuration::default())))
             .clone();
         drop(state);
         let _gate = session.gate.lock().await;
+        self.synchronize_session(&session).await?;
         let _delivery = session.delivery.lock().await;
         ensure!(
             session.data.lock().await.active_turn.is_none(),
@@ -164,7 +165,7 @@ impl Server {
                 .await?;
             session.data.lock().await.open = false;
         }
-        let response = match self.backend.request("thread/resume", params).await {
+        let snapshot = match self.backend.request_snapshot("thread/resume", params).await {
             Ok(response) => response,
             Err(error) => {
                 if !was_registered {
@@ -179,12 +180,17 @@ impl Server {
                 return Err(error.into());
             }
         };
+        let response = snapshot.value;
         let mut previous_leases = {
             let mut data = session.data.lock().await;
             data.open = true;
             data.closing = false;
             data.configuration = Configuration::from_response(&response, models);
+            data.settings_cutoff = snapshot.sequence;
             data.pending_settings = None;
+            if request.replay_from.is_some() {
+                data.snapshot_cutoffs.clear();
+            }
             std::mem::replace(&mut data.mcp_leases, prepared.leases)
         };
         if let Err(error) = previous_leases.close().await {

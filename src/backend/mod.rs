@@ -74,6 +74,8 @@ pub enum BackendError {
 #[derive(Debug)]
 pub enum BackendEvent {
     Notification {
+        /// Monotonic backend frame order, shared with authoritative RPC snapshots.
+        sequence: u64,
         method: String,
         params: Value,
     },
@@ -87,12 +89,18 @@ pub enum BackendEvent {
     },
 }
 
-type Reply = oneshot::Sender<Result<Value, BackendError>>;
+pub(crate) struct Snapshot {
+    pub value: Value,
+    pub sequence: u64,
+}
+
+type Reply = oneshot::Sender<Result<Snapshot, BackendError>>;
 
 #[derive(Default)]
 struct State {
     pending: HashMap<u64, Reply>,
     disconnected: Option<String>,
+    sequence: u64,
 }
 
 struct Inner {
@@ -126,6 +134,15 @@ impl Backend {
 
     /// Send a correlated RPC. Dropping this future removes its pending reply slot.
     pub async fn request(&self, method: &str, params: Value) -> Result<Value, BackendError> {
+        Ok(self.request_snapshot(method, params).await?.value)
+    }
+
+    /// Return the reader's exact response position for reconciling earlier events.
+    pub(crate) async fn request_snapshot(
+        &self,
+        method: &str,
+        params: Value,
+    ) -> Result<Snapshot, BackendError> {
         let id = self.0.next_id.fetch_add(1, Ordering::Relaxed);
         let (reply, receive) = oneshot::channel();
         {

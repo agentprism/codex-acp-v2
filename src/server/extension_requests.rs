@@ -169,6 +169,7 @@ impl Server {
             let session = session
                 .as_ref()
                 .context("history mutation requires a session")?;
+            self.synchronize_session(session).await?;
             self.reconcile_settings(session).await?;
             ensure!(
                 session.data.lock().await.active_turn.is_none(),
@@ -194,6 +195,7 @@ impl Server {
                 .request("thread/backgroundTerminals/clean", json!({"threadId":id}))
                 .await?;
         }
+        let mut response_sequence = 0;
         let response = if envelope.method == "mcpServer/event/stream/start" {
             self.start_stream(&envelope).await?
         } else if envelope.method == "mcpServer/event/stream/stop" {
@@ -212,10 +214,13 @@ impl Server {
         } else {
             match self
                 .backend
-                .request(&envelope.method, envelope.params)
+                .request_snapshot(&envelope.method, envelope.params)
                 .await
             {
-                Ok(response) => response,
+                Ok(snapshot) => {
+                    response_sequence = snapshot.sequence;
+                    snapshot.value
+                }
                 Err(error) => {
                     if envelope.method == "turn/start"
                         && matches!(error, crate::backend::BackendError::Rpc(_))
@@ -266,7 +271,7 @@ impl Server {
             if envelope.method == "thread/revert" {
                 session.data.lock().await.reconciled_revert_notification = true;
             }
-            self.reset_history(id, session, &envelope.method, connection)
+            self.reset_history(id, session, &envelope.method, response_sequence, connection)
                 .await?;
         }
         if matches!(envelope.method.as_str(), "thread/archive" | "thread/delete")

@@ -80,13 +80,14 @@ impl Server {
     ) -> Result<()> {
         let mut cursor = Value::Null;
         for _ in 0..self.options.max_replay_items.max(1) {
-            let page = self
+            let snapshot = self
                 .backend
-                .request(
+                .request_snapshot(
                     "thread/items/list",
                     json!({"threadId":thread,"cursor":cursor,"sortDirection":"asc","limit":100}),
                 )
                 .await?;
+            let page = snapshot.value;
             let entries = page["data"]
                 .as_array()
                 .context("thread/items/list response missing data")?;
@@ -95,14 +96,14 @@ impl Server {
                 .context("session replay exceeds configured item limit")?;
             for entry in entries {
                 let mut data = session.data.lock().await;
-                if entry["item"]["status"].as_str() != Some("inProgress")
-                    && let Some(item_id) = entry["item"]["id"].as_str()
-                {
-                    data.replayed_finalized.insert(if thread == root {
+                if let Some(item_id) = entry["item"]["id"].as_str() {
+                    let projected_id = if thread == root {
                         item_id.to_owned()
                     } else {
                         crate::projection::child_item_id(thread, item_id)
-                    });
+                    };
+                    data.snapshot_cutoffs
+                        .insert(projected_id, snapshot.sequence);
                 }
                 let updates = if thread == root {
                     data.projector.replay_item(&entry["item"])?
@@ -172,12 +173,14 @@ impl Server {
         id: &str,
         session: &Session,
         reason: &str,
+        cutoff: u64,
         connection: &V2ConnectionTo<Client>,
     ) -> Result<()> {
         let revision = {
             let mut data = session.data.lock().await;
             data.history_revision += 1;
-            data.replayed_finalized.clear();
+            data.snapshot_cutoffs.clear();
+            data.history_cutoff = cutoff;
             data.projector = crate::projection::Projector::default();
             data.history_revision
         };

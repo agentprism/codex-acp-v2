@@ -156,6 +156,16 @@ fn dispatch(
     let object = value
         .as_object()
         .ok_or_else(|| BackendError::Protocol("expected a JSON object".into()))?;
+    let sequence = {
+        let mut state = state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.sequence = state
+            .sequence
+            .checked_add(1)
+            .ok_or_else(|| BackendError::Protocol("backend frame sequence exhausted".into()))?;
+        state.sequence
+    };
     if let Some(method) = object.get("method") {
         let method = method
             .as_str()
@@ -174,7 +184,11 @@ fn dispatch(
                 params,
             }
         } else {
-            BackendEvent::Notification { method, params }
+            BackendEvent::Notification {
+                sequence,
+                method,
+                params,
+            }
         };
         return events.try_send(event).map_err(|error| match error {
             mpsc::error::TrySendError::Full(_) => BackendError::Limit(
@@ -190,7 +204,10 @@ fn dispatch(
         BackendError::Protocol("response has no matching numeric request ID".into())
     })?;
     let result = match (object.get("result"), object.get("error")) {
-        (Some(result), None) => Ok(result.clone()),
+        (Some(result), None) => Ok(Snapshot {
+            value: result.clone(),
+            sequence,
+        }),
         (None, Some(error)) => Err(BackendError::Rpc(
             serde_json::from_value(error.clone())
                 .map_err(|_| BackendError::Protocol("malformed RPC error".into()))?,

@@ -34,6 +34,8 @@ pending_settings = False
 completed_turn = None
 streams = {}
 stream_stops = []
+parallel_threads = {}
+pending_replay = None
 
 
 def complete_turn(text="done", status="completed"):
@@ -81,6 +83,43 @@ for line in sys.stdin:
     elif scenario == "oversize":
         sys.stdout.write("x" * 4096)
         sys.stdout.flush()
+    elif scenario == "parallel":
+        params = request.get("params", {})
+        if method == "model/list":
+            if pending_replay:
+                root = pending_replay["params"]["threadId"]
+                terminal = {"type":"commandExecution","id":"replay-tool","command":"echo","cwd":parallel_threads[root]["cwd"],"status":"completed","aggregatedOutput":"before\n","exitCode":None,"durationMs":None,"processId":"background","commandActions":[]}
+                notify("item/commandExecution/outputDelta",{"threadId":root,"turnId":"saved-turn","itemId":"replay-tool","delta":"before\n"})
+                notify("item/commandExecution/terminalInteraction",{"threadId":root,"turnId":"saved-turn","itemId":"replay-tool","processId":"background","stdin":"input not represented by history"})
+                reply(pending_replay, {"data":[{"turnId":"saved-turn","item":{"type":"agentMessage","id":"saved-message","text":"retained history"}},{"turnId":"saved-turn","item":terminal}],"nextCursor":None})
+                notify("item/commandExecution/outputDelta",{"threadId":root,"turnId":"saved-turn","itemId":"replay-tool","delta":"after\n"})
+                pending_replay = None
+            reply(request, {"data":[],"nextCursor":None})
+        elif method == "thread/start":
+            thread_id = f"parallel-{len(parallel_threads)+1}"
+            parallel_threads[thread_id] = {"id":thread_id,"cwd":params["cwd"],"status":{"type":"idle"}}
+            reply(request,{"thread":parallel_threads[thread_id],"model":"model-a","sandbox":{"type":"readOnly"}})
+        elif method == "thread/read":
+            reply(request,{"thread":parallel_threads[params["threadId"]]})
+        elif method == "thread/resume":
+            notify("thread/name/updated",{"threadId":params["threadId"],"threadName":"During replay"})
+            reply(request,{"thread":parallel_threads[params["threadId"]],"model":"model-a","sandbox":{"type":"readOnly"}})
+        elif method == "thread/items/list":
+            pending_replay = request
+            notify("fixture/replayBlocked",{"threadId":"parallel-2"})
+        elif method == "turn/start":
+            thread_id = params["threadId"]
+            turn = {"id":"other-turn","status":"inProgress","items":[]}
+            notify("turn/started",{"threadId":thread_id,"turn":turn})
+            reply(request,{"turn":turn})
+            notify("item/completed",{"threadId":thread_id,"turnId":"other-turn","item":{"type":"agentMessage","id":"other-answer","text":"other session remained responsive"}})
+            notify("turn/completed",{"threadId":thread_id,"turn":{"id":"other-turn","status":"completed","items":[]}})
+        elif method in ("thread/list","thread/loaded/list","thread/turns/list"):
+            reply(request,{"data":[],"nextCursor":None})
+        elif method in ("thread/unsubscribe","thread/backgroundTerminals/clean"):
+            reply(request,{})
+        else:
+            send({"id":request["id"],"error":{"code":-32601,"message":f"parallel fixture does not implement {method}"}})
     elif scenario == "server":
         params = request.get("params", {})
         if method == "model/list":
@@ -119,10 +158,12 @@ for line in sys.stdin:
         elif method == "thread/items/list":
             reply(request, {"data": child_history if params["threadId"] == "child" else history, "nextCursor": None})
         elif method in ("thread/rollback", "thread/revert"):
+            removed = history[-1]
             turns = list(dict.fromkeys(entry["turnId"] for entry in history))
             retained = turns[:-params["numTurns"]] if method == "thread/rollback" else turns[:turns.index(params["beforeTurnId"])]
             history = [entry for entry in history if entry["turnId"] in retained]
             completed_turn = {"id": retained[-1], "status": "completed", "items": []} if retained else None
+            notify("item/completed", {"threadId":thread["id"],"turnId":removed["turnId"],"item":removed["item"]})
             reply(request, {"thread": thread})
             if method == "thread/revert":
                 notify("thread/reverted", {"threadId": thread["id"]})

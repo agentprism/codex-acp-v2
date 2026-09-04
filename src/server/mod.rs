@@ -1,6 +1,7 @@
 //! ACP v2 frontend and the independently running Codex event pump.
 
 mod controls;
+mod dispatch;
 mod events;
 mod extension_requests;
 mod handlers;
@@ -79,10 +80,16 @@ struct State {
     early_bytes: usize,
 }
 
-struct Registration {
-    id: String,
-    configuration: Configuration,
-    reply: oneshot::Sender<Arc<Session>>,
+enum Registration {
+    New {
+        id: String,
+        configuration: Configuration,
+        reply: oneshot::Sender<Arc<Session>>,
+    },
+    Fence {
+        session: Arc<Session>,
+        reply: oneshot::Sender<Arc<Session>>,
+    },
 }
 
 struct PendingInteraction {
@@ -96,11 +103,25 @@ enum InteractionCancellation {
 }
 
 struct Session {
+    id: String,
     gate: Mutex<()>,
     admission: Mutex<()>,
     delivery: Mutex<()>,
     data: Mutex<SessionData>,
     changed: Notify,
+    events: Mutex<SessionEvents>,
+}
+
+#[derive(Default)]
+struct SessionEvents {
+    pending: VecDeque<(SessionEvent, usize)>,
+    bytes: usize,
+    running: bool,
+}
+
+enum SessionEvent {
+    Backend(BackendEvent),
+    Registered(oneshot::Sender<Arc<Session>>),
 }
 
 struct SessionData {
@@ -108,7 +129,9 @@ struct SessionData {
     closing: bool,
     active_turn: Option<String>,
     last_completed_turn: Option<String>,
-    replayed_finalized: HashSet<String>,
+    snapshot_cutoffs: HashMap<String, u64>,
+    history_cutoff: u64,
+    settings_cutoff: u64,
     settings_generation: u64,
     pending_settings: Option<PendingSettings>,
     history_revision: u64,
@@ -125,8 +148,9 @@ struct PendingSettings {
 }
 
 impl Session {
-    fn new(configuration: Configuration) -> Self {
+    fn new(id: String, configuration: Configuration) -> Self {
         Self {
+            id,
             gate: Mutex::new(()),
             admission: Mutex::new(()),
             delivery: Mutex::new(()),
@@ -135,7 +159,9 @@ impl Session {
                 closing: false,
                 active_turn: None,
                 last_completed_turn: None,
-                replayed_finalized: HashSet::new(),
+                snapshot_cutoffs: HashMap::new(),
+                history_cutoff: 0,
+                settings_cutoff: 0,
                 settings_generation: 0,
                 pending_settings: None,
                 history_revision: 0,
@@ -145,6 +171,7 @@ impl Session {
                 mcp_leases: crate::mcp::McpLeases::default(),
             }),
             changed: Notify::new(),
+            events: Mutex::new(SessionEvents::default()),
         }
     }
 }
@@ -182,7 +209,7 @@ impl Server {
     async fn register(&self, id: String, configuration: Configuration) -> Result<Arc<Session>> {
         let (reply, result) = oneshot::channel();
         self.registrations
-            .send(Registration {
+            .send(Registration::New {
                 id,
                 configuration,
                 reply,
@@ -192,6 +219,24 @@ impl Server {
         result
             .await
             .context("event pump stopped during session registration")
+    }
+
+    /// Observe all backend events already read before replacing session state.
+    /// The event pump fences its input and then the session's independent FIFO.
+    async fn synchronize_session(&self, session: &Arc<Session>) -> Result<()> {
+        let (reply, result) = oneshot::channel();
+        self.registrations
+            .send(Registration::Fence {
+                session: session.clone(),
+                reply,
+            })
+            .await
+            .context("event pump closed while synchronizing session")?;
+        tokio::time::timeout(self.options.backend.request_timeout, result)
+            .await
+            .context("session event synchronization timed out")?
+            .context("event pump closed before session synchronization")?;
+        Ok(())
     }
 
     async fn session(&self, id: &str) -> Result<Arc<Session>> {

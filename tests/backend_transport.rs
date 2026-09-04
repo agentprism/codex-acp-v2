@@ -49,7 +49,7 @@ async fn responses_and_callbacks_remain_responsive_and_cancelled_requests_releas
         .await
         .unwrap();
     assert!(
-        matches!(event(&mut events).await, BackendEvent::Notification { method, params } if method == "approval-received" && params == json!({"decision": "decline"}))
+        matches!(event(&mut events).await, BackendEvent::Notification { method, params, .. } if method == "approval-received" && params == json!({"decision": "decline"}))
     );
 
     let pending_backend = backend.clone();

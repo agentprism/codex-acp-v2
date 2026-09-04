@@ -5,7 +5,9 @@ use anyhow::{Context, Result, bail};
 use serde_json::{Value, json, value::to_raw_value};
 use tokio::sync::{mpsc, oneshot};
 
-use super::{InteractionCancellation, PendingInteraction, Registration, Server, Session};
+use super::{
+    InteractionCancellation, PendingInteraction, Registration, Server, Session, SessionEvent,
+};
 use crate::{
     backend::{BackendEvent, RpcError},
     interactions::{self, Interaction},
@@ -22,11 +24,14 @@ impl Server {
         let mut registered = None;
         loop {
             if queued.is_empty()
-                && let Some((reply, session)) = registered.take()
+                && let Some((reply, session, finish_setup)) = registered.take()
             {
                 let reply: oneshot::Sender<Arc<Session>> = reply;
-                self.state.lock().await.setup_in_progress = false;
-                let _ = reply.send(session);
+                if finish_setup {
+                    self.state.lock().await.setup_in_progress = false;
+                }
+                self.enqueue_session_event(session, SessionEvent::Registered(reply), &connection)
+                    .await?;
             }
             let event = if let Some(event) = queued.pop_front() {
                 event
@@ -34,12 +39,27 @@ impl Server {
                 tokio::select! {
                     registration = registrations.recv() => {
                         let Some(registration) = registration else { return Ok(()) };
-                        let mut state = self.state.lock().await;
-                        let session = Arc::new(Session::new(registration.configuration));
-                        state.sessions.insert(registration.id.clone(), session.clone());
-                        queued = std::mem::take(&mut state.early_events);
-                        state.early_bytes = 0;
-                        registered = Some((registration.reply, session));
+                        match registration {
+                            Registration::New { id, configuration, reply } => {
+                                let mut state = self.state.lock().await;
+                                let session = Arc::new(Session::new(id.clone(), configuration));
+                                state.sessions.insert(id, session.clone());
+                                queued = std::mem::take(&mut state.early_events);
+                                state.early_bytes = 0;
+                                registered = Some((reply, session, true));
+                            }
+                            Registration::Fence { session, reply } => {
+                                // Responses are routed by the reader after prior events are
+                                // enqueued. Capture that finite prefix without waiting for
+                                // unrelated sessions to become idle.
+                                for _ in 0..events.len() {
+                                    if let Ok(event) = events.try_recv() {
+                                        queued.push_back(event);
+                                    }
+                                }
+                                registered = Some((reply, session, false));
+                            }
+                        }
                         continue;
                     }
                     event = events.recv() => match event { Some(event) => event, None => return Ok(()) },
@@ -66,12 +86,20 @@ impl Server {
                     continue;
                 }
             }
+            let Some(event) = self.route_session_event(event, &connection).await? else {
+                continue;
+            };
             match event {
-                BackendEvent::Notification { method, params } => {
-                    self.notification(&method, params, &connection).await?
+                BackendEvent::Notification {
+                    sequence,
+                    method,
+                    params,
+                } => {
+                    self.notification(&method, params, &connection, None, sequence)
+                        .await?
                 }
                 BackendEvent::ServerRequest { id, method, params } => {
-                    self.server_request(id, method, params, connection.clone())
+                    self.server_request(id, method, params, connection.clone(), None)
                         .await?
                 }
                 BackendEvent::Disconnected { message } => {
@@ -105,27 +133,22 @@ impl Server {
         }
     }
 
-    async fn notification(
+    pub(super) async fn notification(
         &self,
         method: &str,
         params: Value,
         connection: &V2ConnectionTo<Client>,
+        target: Option<Arc<Session>>,
+        sequence: u64,
     ) -> Result<()> {
-        if method == "serverRequest/resolved" {
-            let id = params
-                .get("requestId")
-                .context("resolved server request missing requestId")?;
-            if let Some(entry) = self.state.lock().await.pending.remove(&id.to_string()) {
-                let _ = entry.cancel.send(InteractionCancellation::Dismissed);
-            }
-        }
         let thread_id = params
             .get("threadId")
             .and_then(Value::as_str)
             .or_else(|| params.pointer("/thread/id").and_then(Value::as_str));
-        let owner = match thread_id {
-            Some(id) => self.owner_for_thread(id).await?,
-            None => {
+        let owner = match (&target, thread_id) {
+            (Some(session), _) => Some(session.id.clone()),
+            (None, Some(id)) => self.owner_for_thread(id).await?,
+            (None, None) => {
                 let state = self.state.lock().await;
                 params
                     .get("subscriptionId")
@@ -134,10 +157,12 @@ impl Server {
             }
         };
         let state = self.state.lock().await;
-        let session = owner
-            .as_ref()
-            .and_then(|id| state.sessions.get(id))
-            .cloned();
+        let session = target.or_else(|| {
+            owner
+                .as_ref()
+                .and_then(|id| state.sessions.get(id))
+                .cloned()
+        });
         let raw = state
             .negotiation
             .as_ref()
@@ -146,6 +171,26 @@ impl Server {
         drop(state);
         if let (Some(id), Some(session)) = (owner.as_deref(), session) {
             let _delivery = session.delivery.lock().await;
+            if !session.data.lock().await.open
+                || !self
+                    .state
+                    .lock()
+                    .await
+                    .sessions
+                    .get(id)
+                    .is_some_and(|current| Arc::ptr_eq(current, &session))
+            {
+                return Ok(());
+            }
+            if method == "serverRequest/resolved" {
+                let request_id = params
+                    .get("requestId")
+                    .context("resolved server request missing requestId")?;
+                let mut state = self.state.lock().await;
+                if let Some(entry) = state.pending.remove(&request_id.to_string()) {
+                    let _ = entry.cancel.send(InteractionCancellation::Dismissed);
+                }
+            }
             if method == "thread/reverted" && thread_id == Some(id) {
                 let already_reconciled =
                     std::mem::take(&mut session.data.lock().await.reconciled_revert_notification);
@@ -158,7 +203,8 @@ impl Server {
                         .as_ref()
                         .is_some_and(|negotiation| negotiation.session_reset)
                     {
-                        self.reset_history(id, &session, method, connection).await?;
+                        self.reset_history(id, &session, method, sequence, connection)
+                            .await?;
                     } else {
                         self.notification_failure(connection, id, "history reconciliation", anyhow::anyhow!("backend replaced history; this client must reopen its transcript because it did not negotiate sessionReset")).await?;
                     }
@@ -167,19 +213,34 @@ impl Server {
             let mut data = session.data.lock().await;
             let mut updates = Vec::new();
             let descendant = thread_id.filter(|thread| *thread != id);
+            let item_id = params
+                .get("itemId")
+                .and_then(Value::as_str)
+                .or_else(|| params.pointer("/item/id").and_then(Value::as_str));
+            let projected_id = item_id.map(|item| match descendant {
+                Some(child) => crate::projection::child_item_id(child, item),
+                None => item.to_owned(),
+            });
+            // Only persisted snapshots and their constituent deltas are replaced.
+            // Progress, stdin interaction and unrelated background activity are not
+            // present in item history and must remain deliverable after replay.
+            let snapshot_covered = matches!(
+                method,
+                "item/started"
+                    | "item/completed"
+                    | "item/agentMessage/delta"
+                    | "item/plan/delta"
+                    | "item/reasoning/summaryTextDelta"
+                    | "item/reasoning/textDelta"
+                    | "item/commandExecution/outputDelta"
+                    | "item/fileChange/patchUpdated"
+            ) && (sequence <= data.history_cutoff
+                || projected_id
+                    .as_ref()
+                    .and_then(|item| data.snapshot_cutoffs.get(item))
+                    .is_some_and(|cutoff| sequence <= *cutoff));
             if let Some(child) = descendant {
-                let item_id = params
-                    .get("itemId")
-                    .and_then(Value::as_str)
-                    .or_else(|| params.pointer("/item/id").and_then(Value::as_str));
-                let stale = (method.ends_with("/delta")
-                    || method.ends_with("Delta")
-                    || method == "item/started")
-                    && item_id.is_some_and(|item_id| {
-                        data.replayed_finalized
-                            .contains(&crate::projection::child_item_id(child, item_id))
-                    });
-                if !stale {
+                if !snapshot_covered {
                     updates.extend(data.projector.project_child(method, &params, child)?);
                 }
             } else {
@@ -198,7 +259,7 @@ impl Server {
                         data.last_completed_turn = completed.map(str::to_owned);
                         session.changed.notify_waiters();
                     }
-                    "thread/settings/updated" => {
+                    "thread/settings/updated" if sequence > data.settings_cutoff => {
                         data.configuration.settings = params["threadSettings"]
                             .as_object()
                             .cloned()
@@ -211,17 +272,7 @@ impl Server {
                     }
                     _ => {}
                 }
-                let replayed_delta = (method.ends_with("/delta") || method.ends_with("Delta"))
-                    && params
-                        .get("itemId")
-                        .and_then(Value::as_str)
-                        .is_some_and(|id| data.replayed_finalized.contains(id));
-                let replayed_start = method == "item/started"
-                    && params
-                        .pointer("/item/id")
-                        .and_then(Value::as_str)
-                        .is_some_and(|id| data.replayed_finalized.contains(id));
-                if !replayed_delta && !replayed_start {
+                if !snapshot_covered {
                     updates.extend(data.projector.project(method, &params)?);
                 }
             }
@@ -243,24 +294,32 @@ impl Server {
         Ok(())
     }
 
-    async fn server_request(
+    pub(super) async fn server_request(
         &self,
         id: Value,
         method: String,
         params: Value,
         connection: V2ConnectionTo<Client>,
+        target: Option<Arc<Session>>,
     ) -> Result<()> {
         let source_thread = params["threadId"].as_str();
-        let session_id = match source_thread {
-            Some(id) => self.owner_for_thread(id).await?,
-            None => None,
+        let session_id = match (&target, source_thread) {
+            (Some(session), _) => Some(session.id.clone()),
+            (None, Some(id)) => self.owner_for_thread(id).await?,
+            (None, None) => None,
         };
         let root_session = {
             let state = self.state.lock().await;
-            session_id
-                .as_ref()
-                .and_then(|id| state.sessions.get(id))
-                .cloned()
+            target.or_else(|| {
+                session_id
+                    .as_ref()
+                    .and_then(|id| state.sessions.get(id))
+                    .cloned()
+            })
+        };
+        let _delivery = match &root_session {
+            Some(session) => Some(session.delivery.lock().await),
+            None => None,
         };
         // Serialize callback insertion with close's `closing` transition. No State lock
         // is held while acquiring session data, so teardown and ancestry reads stay live.
@@ -286,7 +345,13 @@ impl Server {
         let mut state = self.state.lock().await;
         let owned = session_id
             .as_ref()
-            .is_some_and(|id| state.sessions.contains_key(id));
+            .zip(root_session.as_ref())
+            .is_some_and(|(id, expected)| {
+                state
+                    .sessions
+                    .get(id)
+                    .is_some_and(|current| Arc::ptr_eq(current, expected))
+            });
         if !owned && !(source_thread.is_none() && self.options.allow_host_methods) {
             drop(state);
             drop(root_data);
@@ -384,6 +449,7 @@ impl Server {
             .await?;
         }
         drop(root_data);
+        drop(_delivery);
         let server = self.clone();
         let callback_connection = connection.clone();
         connection.spawn(async move {
@@ -410,8 +476,14 @@ impl Server {
                     .await
                     .map_err(|error| super::rpc_error(error.into()))?,
             }
-            if let Some(id) = &session_id
-                && let Ok(session) = server.session(id).await
+            if let (Some(id), Some(session)) = (&session_id, &root_session)
+                && server
+                    .state
+                    .lock()
+                    .await
+                    .sessions
+                    .get(id)
+                    .is_some_and(|current| Arc::ptr_eq(current, session))
             {
                 let pending = server
                     .state
