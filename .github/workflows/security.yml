@@ -1,0 +1,57 @@
+name: Dependency security
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 7 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+
+jobs:
+  audit:
+    name: Audit and license inventory
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup show
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin/cargo-audit
+            ~/.cargo/bin/cargo-about
+          key: security-tools-${{ runner.os }}-audit-0.22.2-about-0.9.2-${{ hashFiles('rust-toolchain.toml') }}
+      - name: Install pinned security tools
+        run: |
+          if [ "$(cargo-audit --version 2>/dev/null || true)" != 'cargo-audit 0.22.2' ]; then
+            cargo install --locked --force cargo-audit --version 0.22.2
+          fi
+          if [ "$(cargo-about --version 2>/dev/null || true)" != 'cargo-about 0.9.2' ]; then
+            cargo install --locked --force cargo-about --version 0.9.2
+          fi
+      - name: Check current RustSec advisories
+        run: cargo audit --deny warnings
+      - name: Generate complete dependency license notices
+        run: cargo about generate --locked --fail about.hbs --output-file THIRD-PARTY-NOTICES.html
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: third-party-notices
+          path: THIRD-PARTY-NOTICES.html
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7

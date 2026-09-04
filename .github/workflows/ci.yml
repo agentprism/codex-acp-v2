@@ -1,0 +1,147 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  merge_group:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  RUST_BACKTRACE: "1"
+  PYTHONUTF8: "1"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  style:
+    name: Formatting and workflow lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - run: rustup show
+      - run: cargo fmt --all --check
+      - name: Lint GitHub Actions
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -color
+      - name: Verify release tooling
+        run: python -m unittest discover --start-directory scripts --pattern '*_tests.py'
+
+  rust:
+    name: Rust (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            arch: X64
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            arch: ARM64
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            arch: ARM64
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            arch: X64
+            rustflags: -C target-feature=+crt-static
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      BUILD_TARGET: ${{ matrix.target }}
+      EXPECTED_ARCH: ${{ matrix.arch }}
+      RUSTFLAGS: ${{ matrix.rustflags || '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Verify native architecture
+        run: test "$RUNNER_ARCH" = "$EXPECTED_ARCH"
+      - name: Install Linux static linker
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes musl-tools
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup show
+          rustup target add "$BUILD_TARGET"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: rust-${{ matrix.target }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'Cargo.toml') }}
+      - run: cargo check --locked --all-targets --target "$BUILD_TARGET"
+      - run: cargo clippy --locked --all-targets --target "$BUILD_TARGET" -- -D warnings
+      - run: cargo test --locked --all-targets --target "$BUILD_TARGET"
+      - name: Check public API documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --locked --no-deps --target "$BUILD_TARGET"
+
+  supply-chain:
+    name: Dependency security and licenses
+    uses: ./.github/workflows/security.yml
+
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: moderate
+          comment-summary-in-pr: never
+
+  passed:
+    name: CI passed
+    if: always()
+    needs: [style, rust, supply-chain, dependency-review]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every applicable check
+        env:
+          STYLE_RESULT: ${{ needs.style.result }}
+          RUST_RESULT: ${{ needs.rust.result }}
+          SUPPLY_CHAIN_RESULT: ${{ needs.supply-chain.result }}
+          DEPENDENCY_REVIEW_RESULT: ${{ needs.dependency-review.result }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          test "$STYLE_RESULT" = success
+          test "$RUST_RESULT" = success
+          test "$SUPPLY_CHAIN_RESULT" = success
+          if [ "$EVENT_NAME" = pull_request ]; then
+            test "$DEPENDENCY_REVIEW_RESULT" = success
+          else
+            test "$DEPENDENCY_REVIEW_RESULT" = skipped
+          fi

@@ -1,0 +1,161 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  PYTHONUTF8: "1"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  version:
+    name: Validate release tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Require a versioned tag on main
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          test "$REF_TYPE" = tag
+          python scripts/release.py validate --tag "$RELEASE_TAG"
+          git merge-base --is-ancestor HEAD origin/main
+
+  validation:
+    name: Release validation
+    needs: version
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    name: Build (${{ matrix.target }})
+    needs: [version, validation]
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            arch: X64
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            arch: ARM64
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            arch: ARM64
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            arch: X64
+            rustflags: -C target-feature=+crt-static
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      BUILD_TARGET: ${{ matrix.target }}
+      EXPECTED_ARCH: ${{ matrix.arch }}
+      RUSTFLAGS: ${{ matrix.rustflags || '' }}
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Verify native architecture
+        run: test "$RUNNER_ARCH" = "$EXPECTED_ARCH"
+      - name: Install Linux static linker
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes musl-tools
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup show
+          rustup target add "$BUILD_TARGET"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: release-sources-${{ matrix.target }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: third-party-notices
+      - name: Build optimized binary from the lockfile
+        run: cargo build --locked --release --target "$BUILD_TARGET"
+      - name: Smoke-test and package the release
+        run: python scripts/release.py package --tag "$RELEASE_TAG" --target "$BUILD_TARGET"
+      - name: Attest build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/*
+          create-storage-record: false
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: true
+          retention-days: 7
+
+  publish:
+    name: Publish verified release
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Verify provenance for every archive and generate checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python scripts/release.py manifest --tag "$RELEASE_TAG"
+          for archive in dist/*.tar.gz dist/*.zip; do
+            gh attestation verify "$archive" --repo "$GITHUB_REPOSITORY" --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" --source-ref "$GITHUB_REF" --source-digest "$GITHUB_SHA" --deny-self-hosted-runners
+          done
+      - name: Publish without replacing existing assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python scripts/release.py publish --tag "$RELEASE_TAG" --repository "$GITHUB_REPOSITORY"
