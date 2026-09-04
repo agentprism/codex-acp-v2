@@ -35,15 +35,17 @@ jobs:
             ~/.cargo/git
             ~/.cargo/bin/cargo-audit
             ~/.cargo/bin/cargo-about
-          key: security-tools-${{ runner.os }}-audit-0.22.2-about-0.9.2-${{ hashFiles('rust-toolchain.toml') }}
+          key: security-tools-${{ runner.os }}-audit-0.22.2-about-0.9.2-cli-${{ hashFiles('rust-toolchain.toml') }}
       - name: Install pinned security tools
         run: |
           if [ "$(cargo-audit --version 2>/dev/null || true)" != 'cargo-audit 0.22.2' ]; then
             cargo install --locked --force cargo-audit --version 0.22.2
           fi
           if [ "$(cargo-about --version 2>/dev/null || true)" != 'cargo-about 0.9.2' ]; then
-            cargo install --locked --force cargo-about --version 0.9.2
+            cargo install --locked --force cargo-about --version 0.9.2 --features cli
           fi
+          test "$(cargo-audit --version)" = 'cargo-audit 0.22.2'
+          test "$(cargo-about --version)" = 'cargo-about 0.9.2'
       - name: Check current RustSec advisories
         run: cargo audit --deny warnings
       - name: Generate complete dependency license notices
