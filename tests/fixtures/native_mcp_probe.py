@@ -246,7 +246,9 @@ def probe(binary):
             handle(frame())
     def assert_closed(url):
         parsed = urllib.parse.urlparse(url)
-        connection = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=2)
+        # Windows retries refused loopback connections for about two seconds.
+        # Wait for the actual refusal; a timeout must not count as clean shutdown.
+        connection = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=8)
         try:
             connection.request("GET", parsed.path)
             response = connection.getresponse()
