@@ -36,10 +36,14 @@ pub enum ExtensionError {
 }
 
 /// Explicit client opt-in. Absence of a namespace never implies callback support.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Negotiation {
     pub events: HashSet<String>,
     pub server_requests: bool,
+    /// Exact backend callback names (or `*`) the client elects to handle raw.
+    pub raw_server_requests: HashSet<String>,
+    /// Client can clear a session's projection before authoritative replay.
+    pub session_reset: bool,
 }
 
 impl Negotiation {
@@ -78,11 +82,64 @@ impl Negotiation {
                 ExtensionError::Negotiation("serverRequests must be a boolean".into())
             })?;
         }
+        if let Some(callbacks) = codex.get("rawServerRequests") {
+            let callbacks = callbacks.as_array().ok_or_else(|| {
+                ExtensionError::Negotiation("rawServerRequests must be an array".into())
+            })?;
+            if callbacks.len() > 128 {
+                return Err(ExtensionError::Negotiation(
+                    "at most 128 raw callback names are permitted".into(),
+                ));
+            }
+            for callback in callbacks {
+                let callback = callback
+                    .as_str()
+                    .filter(|name| !name.is_empty() && name.len() <= 256)
+                    .ok_or_else(|| {
+                        ExtensionError::Negotiation(
+                            "raw callback names must contain 1–256 bytes".into(),
+                        )
+                    })?;
+                negotiation.raw_server_requests.insert(callback.into());
+            }
+            if !negotiation.raw_server_requests.is_empty() && !negotiation.server_requests {
+                return Err(ExtensionError::Negotiation(
+                    "rawServerRequests requires serverRequests: true".into(),
+                ));
+            }
+        }
+        if let Some(reset) = codex.get("sessionReset") {
+            negotiation.session_reset = reset.as_bool().ok_or_else(|| {
+                ExtensionError::Negotiation("sessionReset must be a boolean".into())
+            })?;
+        }
         Ok(Some(negotiation))
+    }
+
+    /// Capability metadata is canonical; accept the original top-level location
+    /// only when it does not conflict with the declared capability negotiation.
+    pub fn from_initialize_meta(
+        top_level: &Value,
+        capabilities: &Value,
+    ) -> Result<Option<Self>, ExtensionError> {
+        let top = Self::from_meta(top_level)?;
+        let capability = Self::from_meta(capabilities)?;
+        match (top, capability) {
+            (Some(top), Some(capability)) if top != capability => Err(ExtensionError::Negotiation(
+                "conflicting top-level and capability Codex metadata".into(),
+            )),
+            (_, Some(capability)) => Ok(Some(capability)),
+            (top, None) => Ok(top),
+        }
     }
 
     pub fn wants_event(&self, method: &str) -> bool {
         self.events.contains("*") || self.events.contains(method)
+    }
+
+    pub fn wants_raw_callback(&self, method: &str) -> bool {
+        self.server_requests
+            && (self.raw_server_requests.contains("*") || self.raw_server_requests.contains(method))
     }
 }
 
@@ -108,9 +165,12 @@ impl ExtensionPolicy {
     pub fn capabilities(&self) -> Value {
         json!({
             "version": 1,
-            "methods": ["_codex/request", "_codex/event", "_codex/serverRequest"],
+            "methods": ["_codex/request", "_codex/event", "_codex/serverRequest", "_codex/sessionReset"],
             "hostMethods": self.allow_host_methods,
             "eventSubscriptions": true,
+            "rawServerRequests": true,
+            "historyResetSupported": true,
+            "needsSessionResetNegotiation": ["thread/rollback", "thread/revert"],
             "threadMethods": THREAD_METHODS,
             "discoveryMethods": DISCOVERY_METHODS,
             "hostMethodsAvailable": HOST_METHODS,
@@ -250,6 +310,7 @@ const THREAD_METHODS: &[&str] = &[
     "thread/timeline/list",
     "review/start",
     "mcpServer/event/stream/start",
+    "mcpServer/event/stream/stop",
     "mcpServer/tool/call",
 ];
 
@@ -280,7 +341,6 @@ const DISCOVERY_METHODS: &[&str] = &[
 
 const HOST_METHODS: &[&str] = &[
     "thread/delete",
-    "mcpServer/event/stream/stop",
     "thread/shellCommand",
     "server/diagnostics",
     "memory/reset",

@@ -187,3 +187,90 @@ pub(super) fn translate(session_id: &str, method: &str, params: &Value) -> Resul
         resolver: PermissionResolver { choices, cancelled },
     })
 }
+
+/// Codex represents MCP approval as an empty form whose metadata carries the
+/// actual permission choices and tool arguments. Never erase those controls by
+/// rendering it as an ordinary zero-field form.
+pub(super) fn mcp_approval(session_id: &str, params: &Value) -> Result<Option<Interaction>> {
+    if params["mode"] != "form"
+        || params["requestedSchema"]["properties"]
+            .as_object()
+            .is_none_or(|fields| !fields.is_empty())
+    {
+        return Ok(None);
+    }
+    let meta = &params["_meta"];
+    let persistence: Vec<&str> = match &meta["persist"] {
+        Value::Null => vec![],
+        Value::String(value) => vec![value.as_str()],
+        Value::Array(values) => {
+            let Some(values) = values.iter().map(Value::as_str).collect::<Option<Vec<_>>>() else {
+                return Ok(None);
+            };
+            values
+        }
+        _ => return Ok(None),
+    };
+    if persistence
+        .iter()
+        .any(|value| !matches!(*value, "session" | "always"))
+    {
+        return Ok(None);
+    }
+    let mut choices = BTreeMap::new();
+    let mut options = Vec::new();
+    let mut add = |id: &str, label: &str, kind, response| {
+        choices.insert(id.to_owned(), response);
+        options.push(v2::PermissionOption::new(id, label, kind));
+    };
+    add(
+        "once",
+        "Allow once",
+        v2::PermissionOptionKind::AllowOnce,
+        json!({"action":"accept","content":null,"_meta":null}),
+    );
+    if persistence.contains(&"session") {
+        add(
+            "session",
+            "Allow for this session only",
+            v2::PermissionOptionKind::AllowAlways,
+            json!({"action":"accept","content":null,"_meta":{"persist":"session"}}),
+        );
+    }
+    if persistence.contains(&"always") {
+        add(
+            "always",
+            "Allow and remember for future sessions",
+            v2::PermissionOptionKind::AllowAlways,
+            json!({"action":"accept","content":null,"_meta":{"persist":"always"}}),
+        );
+    }
+    add(
+        "decline",
+        "Decline and continue",
+        v2::PermissionOptionKind::RejectOnce,
+        json!({"action":"decline","content":null,"_meta":null}),
+    );
+    let cancelled = json!({"action":"cancel","content":null,"_meta":null});
+    add(
+        "cancel",
+        "Decline and cancel",
+        v2::PermissionOptionKind::RejectOnce,
+        cancelled.clone(),
+    );
+    let message = params["message"]
+        .as_str()
+        .context("MCP approval missing message")?;
+    let description = format!(
+        "{message}\nMCP server: {}\nApproval details: {meta}",
+        params["serverName"]
+    );
+    Ok(Some(Interaction::Permission {
+        request: v2::RequestPermissionRequest::new(session_id, message, options)
+            .description(description)
+            .meta(serde_json::from_value::<v2::Meta>(
+                json!({"codex":{"mcpApproval":params}}),
+            )?),
+        resolver: PermissionResolver { choices, cancelled },
+    }))
+}

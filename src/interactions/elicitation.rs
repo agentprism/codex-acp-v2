@@ -168,6 +168,19 @@ pub(super) fn translate(
     let message = params["message"]
         .as_str()
         .context("elicitation missing message")?;
+    // Privileged approval dialects need their exact interaction semantics, not
+    // an apparently harmless generic form. Known MCP tool approvals are mapped
+    // to explicit permission choices by the caller; others use the raw callback.
+    if params["_meta"].get("codex_approval_kind").is_some()
+        || params["_meta"]["codex_request_type"] == "approval_request"
+    {
+        return Ok(None);
+    }
+    let meta = match params.get("_meta").filter(|value| !value.is_null()) {
+        Some(value) if !value.is_object() => return Ok(None),
+        Some(value) => Some(serde_json::from_value::<v2::Meta>(value.clone())?),
+        None => None,
+    };
     let mut response_schema = None;
     let mode: v2::ElicitationMode = match params["mode"].as_str() {
         Some("form") if capabilities.supports_form() => {
@@ -211,7 +224,7 @@ pub(super) fn translate(
         _ => return Ok(None),
     };
     Ok(Some(Interaction::Elicitation {
-        request: v2::CreateElicitationRequest::new(mode, message),
+        request: v2::CreateElicitationRequest::new(mode, message).meta(meta),
         resolver: ElicitationResolver {
             kind: Kind::Mcp {
                 schema: response_schema,

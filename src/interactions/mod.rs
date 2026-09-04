@@ -40,6 +40,11 @@ pub fn translate(
         | "item/permissions/requestApproval" => {
             permission::translate(session_id, method, params).map(Some)
         }
+        "mcpServer/elicitation/request"
+            if params["_meta"]["codex_approval_kind"] == "mcp_tool_call" =>
+        {
+            permission::mcp_approval(session_id, params)
+        }
         "item/tool/requestUserInput" | "mcpServer/elicitation/request" => {
             elicitation::translate(session_id, method, params, capabilities)
         }

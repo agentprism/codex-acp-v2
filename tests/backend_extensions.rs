@@ -58,3 +58,25 @@ fn negotiation_requires_explicit_callback_support_and_exact_or_wildcard_subscrip
             .is_err()
     );
 }
+
+#[test]
+fn capability_negotiation_selects_lossless_callbacks_without_conflicting_legacy_opt_in() {
+    let capability = json!({"codex":{"version":1,"serverRequests":true,
+        "rawServerRequests":["item/permissions/requestApproval"],"sessionReset":true}});
+    let negotiation = Negotiation::from_initialize_meta(&json!(null), &capability)
+        .unwrap()
+        .unwrap();
+    assert!(negotiation.wants_raw_callback("item/permissions/requestApproval"));
+    assert!(!negotiation.wants_raw_callback("item/fileChange/requestApproval"));
+    assert!(negotiation.session_reset);
+    assert_eq!(
+        Negotiation::from_initialize_meta(&capability, &capability).unwrap(),
+        Some(negotiation)
+    );
+    assert!(
+        Negotiation::from_initialize_meta(&json!({"codex":{"version":1}}), &capability).is_err()
+    );
+    assert!(
+        Negotiation::from_meta(&json!({"codex":{"version":1,"rawServerRequests":["*"]}})).is_err()
+    );
+}
