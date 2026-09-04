@@ -149,10 +149,12 @@ def backend():
 
 
 def probe(binary):
+    # The Rust harness drains inherited stderr. A separate unread stderr pipe
+    # deadlocks on Windows once repeated intentional failure diagnostics fill it.
     process = subprocess.Popen([binary, "--codex-path", sys.executable,
         "--codex-arg", os.path.abspath(__file__), "--codex-arg", "backend",
         "--request-timeout-seconds", "8", "--interaction-timeout-seconds", "8"],
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8")
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, encoding="utf-8")
     received = queue.Queue()
     def read():
         for line in process.stdout:
@@ -343,7 +345,7 @@ def probe(binary):
         live = rpc("_codex/request", {"version": 1, "sessionId": reopened_id, "method": "thread/read", "params": {"threadId": reopened_id}})
         live_url = live["result"]["thread"]["bridgeUrl"]
         process.stdin.close()
-        assert process.wait(timeout=8) == 0, process.stderr.read()
+        assert process.wait(timeout=8) == 0, f"adapter exited with status {process.returncode}"
         assert_closed(live_url)
         print("native MCP full duplex, independent child/reconnect sessions, reverse-call cancellation and cleanup verified")
     finally:
