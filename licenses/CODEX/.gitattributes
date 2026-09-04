@@ -1,0 +1,2 @@
+# Preserve harvested license bytes, including upstream whitespace and CRLF.
+** -text -whitespace linguist-vendored
