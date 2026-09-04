@@ -348,16 +348,17 @@ dependencies = [
  "agent-client-protocol",
  "anyhow",
  "base64",
+ "blocking",
  "clap",
  "futures",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror",
+ "time",
  "tokio",
  "tracing",
  "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]

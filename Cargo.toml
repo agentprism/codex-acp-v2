@@ -10,15 +10,16 @@ publish = false
 agent-client-protocol = { version = "=2.1.0", features = ["unstable_protocol_v2", "unstable_session_fork"] }
 anyhow = "1"
 base64 = "0.22"
+blocking = "1"
 clap = { version = "4", features = ["derive", "env"] }
 futures = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 thiserror = "2"
+time = { version = "0.3", features = ["formatting"] }
 tokio = { version = "1", features = ["io-std", "io-util", "macros", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 tempfile = "3"
