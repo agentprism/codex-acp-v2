@@ -123,58 +123,75 @@ impl Server {
             .get("threadId")
             .and_then(Value::as_str)
             .or_else(|| params.pointer("/thread/id").and_then(Value::as_str));
+        let owner = match thread_id {
+            Some(id) => self.owner_for_thread(id).await?,
+            None => None,
+        };
         let state = self.state.lock().await;
-        let session = thread_id.and_then(|id| state.sessions.get(id)).cloned();
+        let session = owner
+            .as_ref()
+            .and_then(|id| state.sessions.get(id))
+            .cloned();
         let raw = state
             .negotiation
             .as_ref()
             .is_some_and(|negotiation| negotiation.wants_event(method))
             && (session.is_some() || (thread_id.is_none() && self.options.allow_host_methods));
         drop(state);
-        if let (Some(id), Some(session)) = (thread_id, session) {
+        if let (Some(id), Some(session)) = (owner.as_deref(), session) {
             let _delivery = session.delivery.lock().await;
             let mut data = session.data.lock().await;
             let mut updates = Vec::new();
-            match method {
-                "turn/started" => {
-                    data.active_turn = params
-                        .pointer("/turn/id")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned);
-                }
-                "turn/completed" => {
-                    let completed = params.pointer("/turn/id").and_then(Value::as_str);
-                    if data.active_turn.as_deref() == completed {
-                        data.active_turn = None;
+            let descendant = thread_id.filter(|thread| *thread != id);
+            if let Some(child) = descendant {
+                updates.extend(child_tool_updates(
+                    &mut data.projector,
+                    method,
+                    &params,
+                    child,
+                )?);
+            } else {
+                match method {
+                    "turn/started" => {
+                        data.active_turn = params
+                            .pointer("/turn/id")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned);
                     }
-                    data.last_completed_turn = completed.map(str::to_owned);
-                    session.changed.notify_waiters();
+                    "turn/completed" => {
+                        let completed = params.pointer("/turn/id").and_then(Value::as_str);
+                        if data.active_turn.as_deref() == completed {
+                            data.active_turn = None;
+                        }
+                        data.last_completed_turn = completed.map(str::to_owned);
+                        session.changed.notify_waiters();
+                    }
+                    "thread/settings/updated" => {
+                        data.configuration.settings = params["threadSettings"]
+                            .as_object()
+                            .cloned()
+                            .context("effective thread settings missing")?;
+                        data.settings_generation += 1;
+                        updates.push(v2::SessionUpdate::ConfigOptionUpdate(
+                            v2::ConfigOptionUpdate::new(data.configuration.options()),
+                        ));
+                        session.changed.notify_waiters();
+                    }
+                    _ => {}
                 }
-                "thread/settings/updated" => {
-                    data.configuration.settings = params["threadSettings"]
-                        .as_object()
-                        .cloned()
-                        .context("effective thread settings missing")?;
-                    data.settings_generation += 1;
-                    updates.push(v2::SessionUpdate::ConfigOptionUpdate(
-                        v2::ConfigOptionUpdate::new(data.configuration.options()),
-                    ));
-                    session.changed.notify_waiters();
+                let replayed_delta = (method.ends_with("/delta") || method.ends_with("Delta"))
+                    && params
+                        .get("itemId")
+                        .and_then(Value::as_str)
+                        .is_some_and(|id| data.replayed_finalized.contains(id));
+                let replayed_start = method == "item/started"
+                    && params
+                        .pointer("/item/id")
+                        .and_then(Value::as_str)
+                        .is_some_and(|id| data.replayed_finalized.contains(id));
+                if !replayed_delta && !replayed_start {
+                    updates.extend(data.projector.project(method, &params)?);
                 }
-                _ => {}
-            }
-            let replayed_delta = (method.ends_with("/delta") || method.ends_with("Delta"))
-                && params
-                    .get("itemId")
-                    .and_then(Value::as_str)
-                    .is_some_and(|id| data.replayed_finalized.contains(id));
-            let replayed_start = method == "item/started"
-                && params
-                    .pointer("/item/id")
-                    .and_then(Value::as_str)
-                    .is_some_and(|id| data.replayed_finalized.contains(id));
-            if !replayed_delta && !replayed_start {
-                updates.extend(data.projector.project(method, &params)?);
             }
             drop(data);
             for update in updates {
@@ -186,7 +203,7 @@ impl Server {
                 v2::ExtNotification::new(
                     "_codex/event",
                     Arc::from(to_raw_value(
-                        &json!({"version":1,"sessionId":thread_id,"method":method,"params":params}),
+                        &json!({"version":1,"sessionId":owner,"method":method,"params":params}),
                     )?),
                 ),
             )))?;
@@ -201,12 +218,16 @@ impl Server {
         params: Value,
         connection: V2ConnectionTo<Client>,
     ) -> Result<()> {
-        let session_id = params["threadId"].as_str().map(str::to_owned);
+        let source_thread = params["threadId"].as_str();
+        let session_id = match source_thread {
+            Some(id) => self.owner_for_thread(id).await?,
+            None => None,
+        };
         let mut state = self.state.lock().await;
         let owned = session_id
             .as_ref()
             .is_some_and(|id| state.sessions.contains_key(id));
-        if !owned && !(session_id.is_none() && self.options.allow_host_methods) {
+        if !owned && !(source_thread.is_none() && self.options.allow_host_methods) {
             drop(state);
             self.backend
                 .respond(
@@ -233,7 +254,7 @@ impl Server {
             .negotiation
             .as_ref()
             .is_some_and(|negotiation| negotiation.server_requests);
-        let interaction = match interactions::translate(
+        let mut interaction = match interactions::translate(
             session_id.as_deref().unwrap_or(""),
             &method,
             &params,
@@ -248,6 +269,19 @@ impl Server {
                 return Ok(());
             }
         };
+        if let Some(child) = source_thread.filter(|id| Some(*id) != session_id.as_deref())
+            && let Some(Interaction::Permission { request, .. }) = &mut interaction
+            && let Some(v2::RequestPermissionSubject::ToolCall(subject)) = &mut request.subject
+        {
+            subject.tool_call.tool_call_id = v2::ToolCallId::new(super::ownership::child_item_id(
+                child,
+                &subject.tool_call.tool_call_id.to_string(),
+            ));
+            request.description = Some(format!(
+                "Subagent thread: {child}\n{}",
+                request.description.as_deref().unwrap_or_default()
+            ));
+        }
         let (cancel, cancelled) = oneshot::channel();
         state.pending.insert(
             id.to_string(),
@@ -262,7 +296,21 @@ impl Server {
             .and_then(Value::as_bool)
             .unwrap_or(true)
             && !params.get("turnId").is_some_and(Value::is_null);
-        if blocking && let Some(session_id) = &session_id {
+        let foreground = if let Some(session_id) = &session_id {
+            self.session(session_id)
+                .await?
+                .data
+                .lock()
+                .await
+                .active_turn
+                .is_some()
+        } else {
+            false
+        };
+        if blocking
+            && foreground
+            && let Some(session_id) = &session_id
+        {
             self.send_update(
                 &connection,
                 session_id,
@@ -400,4 +448,49 @@ fn event_thread_id(event: &BackendEvent) -> Option<&str> {
         }
         BackendEvent::Disconnected { .. } => None,
     }
+}
+
+fn child_tool_updates(
+    projector: &mut crate::projection::Projector,
+    method: &str,
+    params: &Value,
+    thread_id: &str,
+) -> Result<Vec<v2::SessionUpdate>> {
+    let item_event = matches!(method, "item/started" | "item/completed")
+        && matches!(
+            params["item"]["type"].as_str(),
+            Some(
+                "commandExecution"
+                    | "fileChange"
+                    | "mcpToolCall"
+                    | "dynamicToolCall"
+                    | "webSearch"
+                    | "imageView"
+                    | "imageGeneration"
+                    | "sleep"
+                    | "collabAgentToolCall"
+                    | "subAgentActivity"
+            )
+        );
+    let tool_event = matches!(
+        method,
+        "item/commandExecution/outputDelta"
+            | "item/fileChange/outputDelta"
+            | "item/fileChange/patchUpdated"
+            | "item/mcpToolCall/progress"
+    );
+    if !item_event && !tool_event {
+        return Ok(Vec::new());
+    }
+    let mut projected = params.clone();
+    let id = if item_event {
+        &mut projected["item"]["id"]
+    } else {
+        &mut projected["itemId"]
+    };
+    *id = Value::String(super::ownership::child_item_id(
+        thread_id,
+        id.as_str().context("child tool event missing item id")?,
+    ));
+    projector.project(method, &projected)
 }
