@@ -259,11 +259,32 @@ impl Server {
                         data.last_completed_turn = completed.map(str::to_owned);
                         session.changed.notify_waiters();
                     }
-                    "thread/settings/updated" if sequence > data.settings_cutoff => {
-                        data.configuration.settings = params["threadSettings"]
+                    "thread/settings/updated" => {
+                        let mut settings = params["threadSettings"]
                             .as_object()
                             .cloned()
                             .context("effective thread settings missing")?;
+                        if sequence <= data.settings_cutoff {
+                            // Resume replies omit mode/summary/personality. Retain
+                            // those fields from full notifications, but never let
+                            // an earlier event overwrite fields the reply covers.
+                            settings.extend(data.settings_overlay.clone());
+                            let model = data.settings_overlay.get("model").cloned();
+                            let effort = data.settings_overlay.get("effort").cloned();
+                            if let Some(mode) = settings
+                                .get_mut("collaborationMode")
+                                .and_then(|mode| mode.get_mut("settings"))
+                                .and_then(Value::as_object_mut)
+                            {
+                                if let Some(model) = model {
+                                    mode.insert("model".into(), model);
+                                }
+                                if let Some(effort) = effort {
+                                    mode.insert("reasoning_effort".into(), effort);
+                                }
+                            }
+                        }
+                        data.configuration.settings = settings;
                         data.settings_generation += 1;
                         updates.push(v2::SessionUpdate::ConfigOptionUpdate(
                             v2::ConfigOptionUpdate::new(data.configuration.options()),

@@ -17,9 +17,10 @@ impl Configuration {
     /// unchanged. Codex suppresses duplicate settings notifications, so callers
     /// must not wait for an event for these acknowledged no-op requests.
     pub fn is_settings_noop(&self, patch: &Map<String, Value>) -> bool {
-        self.settings_match(patch) && patch.get("collaborationMode").is_none_or(|value| {
-            value.is_null() || self.settings.get("collaborationMode") == Some(value)
-        })
+        self.settings_match(patch)
+            && patch.get("collaborationMode").is_none_or(|value| {
+                value.is_null() || self.settings.get("collaborationMode") == Some(value)
+            })
     }
 
     /// Match a later authoritative snapshot against a desired effective patch.
@@ -47,17 +48,18 @@ impl Configuration {
                     .is_some_and(|(left, right)| {
                         std::path::Path::new(left) == std::path::Path::new(right)
                     }),
-                "sandboxPolicy" => {
-                    self.settings
-                            .get(key)
-                            .is_some_and(|current| same_sandbox(current, value))
-                }
+                "sandboxPolicy" => self
+                    .settings
+                    .get(key)
+                    .is_some_and(|current| same_sandbox(current, value)),
                 "collaborationMode" => self.settings.get(key).is_some_and(|current| {
                     current["mode"] == value["mode"]
                         && current["settings"]["model"] == value["settings"]["model"]
-                        && current["settings"]["reasoning_effort"] == value["settings"]["reasoning_effort"]
+                        && current["settings"]["reasoning_effort"]
+                            == value["settings"]["reasoning_effort"]
                         && (value["settings"]["developer_instructions"].is_null()
-                            || current["settings"]["developer_instructions"] == value["settings"]["developer_instructions"])
+                            || current["settings"]["developer_instructions"]
+                                == value["settings"]["developer_instructions"])
                 }),
                 "serviceTier" => self.settings.get(key).unwrap_or(&Value::Null) == value,
                 _ => self.settings.get(key) == Some(value),
@@ -181,9 +183,17 @@ impl Configuration {
             .settings
             .get("collaborationMode")
             .and_then(|value| value["mode"].as_str())
-            .unwrap_or("default");
+            .unwrap_or("backend");
+        let mut modes = vec![
+            v2::SessionConfigSelectOption::new("default", "Default"),
+            v2::SessionConfigSelectOption::new("plan", "Plan"),
+        ];
+        if mode == "backend" {
+            modes.push(v2::SessionConfigSelectOption::new("backend", "Backend-managed")
+                .description("Codex has not reported the effective collaboration mode; selecting a preset applies it explicitly."));
+        }
         options.push(
-            select("mode", "Collaboration mode", mode, &["default", "plan"])
+            v2::SessionConfigOption::select("mode", "Collaboration mode", mode, modes)
                 .category(v2::SessionConfigOptionCategory::Mode),
         );
         options
@@ -237,6 +247,10 @@ impl Configuration {
                 patch.insert("sandboxPolicy".into(), policy);
             }
             "mode" => {
+                anyhow::ensure!(
+                    matches!(value.as_str(), "default" | "plan"),
+                    "backend-managed collaboration mode is display-only; choose a supported preset"
+                );
                 let instructions = self
                     .settings
                     .get("collaborationMode")
@@ -267,12 +281,20 @@ fn same_sandbox(current: &Value, requested: &Value) -> bool {
     let fields: &[&str] = match requested["type"].as_str() {
         Some("dangerFullAccess") => &["type"],
         Some("readOnly" | "externalSandbox") => &["type", "networkAccess"],
-        Some("workspaceWrite") => &["type", "networkAccess", "writableRoots", "excludeTmpdirEnvVar", "excludeSlashTmp"],
+        Some("workspaceWrite") => &[
+            "type",
+            "networkAccess",
+            "writableRoots",
+            "excludeTmpdirEnvVar",
+            "excludeSlashTmp",
+        ],
         _ => return current == requested,
     };
-    if [current, requested].iter().any(|value| value.as_object().is_none_or(|object| {
-        object.keys().any(|key| !fields.contains(&key.as_str()))
-    })) {
+    if [current, requested].iter().any(|value| {
+        value
+            .as_object()
+            .is_none_or(|object| object.keys().any(|key| !fields.contains(&key.as_str())))
+    }) {
         return false;
     }
     match requested["type"].as_str() {
@@ -364,19 +386,40 @@ pub(crate) fn thread_parameters(
         "developerInstructions",
     ];
     let allowed = match operation {
-        ThreadOperation::Start => &["ephemeral", "historyMode", "environments", "dynamicTools",
-            "selectedCapabilityRoots", "experimentalRawEvents", "allowProviderModelFallback",
-            "serviceName", "sessionStartSource", "threadSource", "projectId", "personality"][..],
+        ThreadOperation::Start => &[
+            "ephemeral",
+            "historyMode",
+            "environments",
+            "dynamicTools",
+            "selectedCapabilityRoots",
+            "experimentalRawEvents",
+            "allowProviderModelFallback",
+            "serviceName",
+            "sessionStartSource",
+            "threadSource",
+            "projectId",
+            "personality",
+        ][..],
         ThreadOperation::Resume => &["personality"],
-        ThreadOperation::Fork => &["lastTurnId", "beforeTurnId", "threadSource", "deferGoalContinuation", "ephemeral"],
+        ThreadOperation::Fork => &[
+            "lastTurnId",
+            "beforeTurnId",
+            "threadSource",
+            "deferGoalContinuation",
+            "ephemeral",
+        ],
     };
     for key in extra.keys() {
         if !COMMON.contains(&key.as_str()) && !allowed.contains(&key.as_str()) {
             bail!("unsupported field for this thread operation: {key}");
         }
     }
-    if extra.get("lastTurnId").is_some_and(|value| !value.is_null())
-        && extra.get("beforeTurnId").is_some_and(|value| !value.is_null())
+    if extra
+        .get("lastTurnId")
+        .is_some_and(|value| !value.is_null())
+        && extra
+            .get("beforeTurnId")
+            .is_some_and(|value| !value.is_null())
     {
         bail!("lastTurnId and beforeTurnId cannot be combined");
     }

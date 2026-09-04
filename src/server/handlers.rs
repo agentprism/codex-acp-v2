@@ -138,12 +138,34 @@ pub(super) async fn serve(server: Server, events: EventReceiver) -> Result<()> {
         Value,
         |server, request, cx| server.extension(request.0, &cx)
     );
-    let builder = handler!(
-        builder,
-        server,
-        v2::MessageMcpRequest,
-        v2::MessageMcpResponse,
-        |server, request, _cx| async move { server.mcp.request(request).await.map_err(Into::into) }
+    let mcp_server = server.clone();
+    let builder = builder.on_receive_request(
+        async move |request: v2::MessageMcpRequest,
+                    responder: Responder<v2::MessageMcpResponse>,
+                    connection: V2ConnectionTo<Client>| {
+            let server = mcp_server.clone();
+            let permit = match server.request_slots.clone().try_acquire_owned() {
+                Ok(permit) => permit,
+                Err(_) => {
+                    return responder.respond_with_error(agent_client_protocol::Error::new(
+                        -32000,
+                        "too many in-flight ACP requests",
+                    ));
+                }
+            };
+            let cancellation = responder.cancellation();
+            connection.spawn(async move {
+                let _permit = permit;
+                match cancellation
+                    .run_until_cancelled(server.mcp.request(request))
+                    .await
+                {
+                    Ok(response) => responder.respond(response),
+                    Err(error) => responder.respond_with_error(error),
+                }
+            })
+        },
+        agent_client_protocol::on_receive_request!(),
     );
     let mcp = server.mcp.clone();
     let builder = builder.on_receive_notification(

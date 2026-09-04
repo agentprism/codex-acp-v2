@@ -185,7 +185,12 @@ impl Server {
             let mut data = session.data.lock().await;
             data.open = true;
             data.closing = false;
-            data.configuration = Configuration::from_response(&response, models);
+            let mut configuration = Configuration::from_response(&response, models);
+            data.settings_overlay = configuration.settings.clone();
+            let mut observed = std::mem::take(&mut data.configuration.settings);
+            observed.extend(configuration.settings);
+            configuration.settings = observed;
+            data.configuration = configuration;
             data.settings_cutoff = snapshot.sequence;
             data.pending_settings = None;
             if request.replay_from.is_some() {
@@ -193,6 +198,11 @@ impl Server {
             }
             std::mem::replace(&mut data.mcp_leases, prepared.leases)
         };
+        drop(_delivery);
+        // Apply full snapshots already emitted around resume. The response is
+        // only a partial settings snapshot, so omitted fields remain meaningful.
+        self.synchronize_session(&session).await?;
+        let _delivery = session.delivery.lock().await;
         if let Err(error) = previous_leases.close().await {
             self.notification_failure(connection, &id, "MCP resource cleanup", error)
                 .await?;

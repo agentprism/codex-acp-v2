@@ -263,6 +263,61 @@ async fn slow_replay_does_not_block_another_sessions_events_or_prompt() {
 }
 
 #[tokio::test]
+async fn resume_reconciles_full_settings_with_partial_lifecycle_responses() {
+    let mut client = Client::start(true).await;
+    let id = client
+        .new_session(json!({"config":{"audit_resume_settings":true}}))
+        .await;
+    // A cold lifecycle response cannot reveal the collaboration mode. Choosing
+    // default must write a preset, not acknowledge an invented cache no-op.
+    let chosen = client
+        .rpc(
+            "session/set_config_option",
+            json!({"sessionId":id,"configId":"mode","type":"id","value":"default"}),
+        )
+        .await;
+    assert_eq!(current(&chosen["configOptions"], "mode"), "default");
+    let backend = client
+        .rpc(
+            "_codex/request",
+            json!({"version":1,"sessionId":id,"method":"thread/read","params":{"threadId":id}}),
+        )
+        .await;
+    assert_eq!(
+        backend["observedSettings"]["collaborationMode"]["mode"], "default",
+        "the backend started in unreported plan mode; choosing default must actually apply it"
+    );
+    client
+        .rpc(
+            "session/set_config_option",
+            json!({"sessionId":id,"configId":"mode","type":"id","value":"plan"}),
+        )
+        .await;
+    let resumed = client
+        .rpc(
+            "session/resume",
+            json!({"sessionId":id,"cwd":client.directory.path(),"mcpServers":[]}),
+        )
+        .await;
+    assert_eq!(
+        (
+            current(&resumed["configOptions"], "mode"),
+            current(&resumed["configOptions"], "model")
+        ),
+        (json!("plan"), json!("resumed-model")),
+        "a full settings event supplies omitted mode while the later response supplies the model"
+    );
+    let changed = client
+        .rpc(
+            "session/set_config_option",
+            json!({"sessionId":id,"configId":"mode","type":"id","value":"default"}),
+        )
+        .await;
+    assert_eq!(current(&changed["configOptions"], "mode"), "default");
+    client.shutdown().await;
+}
+
+#[tokio::test]
 async fn cancellation_racing_completion_keeps_the_connection_usable() {
     let mut client = Client::start(true).await;
     let id = client.new_session(Value::Null).await;
@@ -408,6 +463,12 @@ async fn session_owned_mcp_streams_route_early_events_stop_and_close_without_hos
 async fn history_mutations_publish_reset_boundaries_and_authoritative_replay() {
     let mut client = Client::start(true).await;
     let id = client.new_session(Value::Null).await;
+    client
+        .rpc(
+            "session/set_config_option",
+            json!({"sessionId":id,"configId":"mode","type":"id","value":"default"}),
+        )
+        .await;
     for text in ["keep", "remove"] {
         client
             .rpc(
@@ -466,6 +527,22 @@ async fn history_mutations_publish_reset_boundaries_and_authoritative_replay() {
             }
         );
     }
+    client
+        .rpc(
+            "session/set_config_option",
+            json!({"sessionId":id,"configId":"mode","type":"id","value":"default"}),
+        )
+        .await;
+    let backend = client
+        .rpc(
+            "_codex/request",
+            json!({"version":1,"sessionId":id,"method":"thread/read","params":{"threadId":id}}),
+        )
+        .await;
+    assert_eq!(
+        backend["observedSettings"]["collaborationMode"]["mode"], "default",
+        "revert restored plan mode; a later native setting must not use the pre-revert no-op cache"
+    );
     client
         .rpc(
             "session/prompt",

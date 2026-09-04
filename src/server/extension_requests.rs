@@ -274,6 +274,13 @@ impl Server {
             self.reset_history(id, session, &envelope.method, response_sequence, connection)
                 .await?;
         }
+        drop(_history_delivery);
+        if history_mutation && let Some(session) = &session {
+            // Revert may restore thread settings as well as transcript items.
+            // Observe its effective notification before a later native request
+            // can decide that a cached setting is already the desired value.
+            self.synchronize_session(session).await?;
+        }
         if matches!(envelope.method.as_str(), "thread/archive" | "thread/delete")
             && let Some(id) = envelope.session_id
         {

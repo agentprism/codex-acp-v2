@@ -50,6 +50,13 @@ def complete_turn(text="done", status="completed"):
     active_turn = None
     thread["status"] = {"type": "idle"}
 
+
+def session_response():
+    # The real lifecycle response is not a full ThreadSettings snapshot.
+    response = {key:value for key,value in settings.items() if key not in ("collaborationMode", "summary", "personality", "sandboxPolicy", "effort")}
+    response["reasoningEffort"] = settings["effort"]
+    return {"thread":thread, **response}
+
 for line in sys.stdin:
     request = json.loads(line)
     method = request.get("method")
@@ -131,15 +138,17 @@ for line in sys.stdin:
             subscribed = True
             thread = {"id": "session-1", "cwd": params["cwd"], "status": {"type": "idle"}, "turns": [], "createdAt": 1, "updatedAt": 2, "name": "Fixture", "preview": "", "creationParams": params}
             settings = {"model": "model-a", "reasoningEffort": "medium", "effort": "medium", "approvalPolicy": "on-request", "sandbox": {"type": "readOnly"}, "sandboxPolicy": {"type": "readOnly"}, "serviceTier": None, "cwd": params["cwd"]}
+            if params.get("config", {}).get("audit_resume_settings"):
+                settings["collaborationMode"] = {"mode":"plan", "settings":{"model":"model-a","reasoning_effort":"medium","developer_instructions":None}}
             notify("thread/started", {"thread": thread})
-            reply(request, {"thread": thread, **settings})
+            reply(request, session_response())
         elif method == "thread/read":
             if params["threadId"] == "child":
                 reply(request, {"thread": {"id": "child", "parentThreadId": thread["id"], "cwd": thread["cwd"], "status": {"type": "active" if child_active else "idle"}}})
             elif params["threadId"] == "unrelated":
                 reply(request, {"thread": {"id": "unrelated", "parentThreadId": None, "cwd": thread["cwd"], "status": {"type": "idle"}}})
             else:
-                reply(request, {"thread": thread, "lastTurnParams": last_turn_params, "streamStops": stream_stops, "activeStreams": list(streams)})
+                reply(request, {"thread": thread, "lastTurnParams": last_turn_params, "streamStops": stream_stops, "activeStreams": list(streams), "observedSettings":settings})
         elif method == "thread/list":
             data = [thread] if thread else []
             if params.get("ancestorThreadId"):
@@ -154,7 +163,10 @@ for line in sys.stdin:
             assert not subscribed, "resume overrides require unsubscribing the existing thread first"
             subscribed = True
             thread["resumeParams"] = params
-            reply(request, {"thread": thread, **settings})
+            if thread["creationParams"].get("config", {}).get("audit_resume_settings"):
+                notify("thread/settings/updated", {"threadId":thread["id"], "threadSettings":settings})
+                settings["model"] = "resumed-model"
+            reply(request, session_response())
         elif method == "thread/items/list":
             reply(request, {"data": child_history if params["threadId"] == "child" else history, "nextCursor": None})
         elif method in ("thread/rollback", "thread/revert"):
@@ -164,6 +176,9 @@ for line in sys.stdin:
             history = [entry for entry in history if entry["turnId"] in retained]
             completed_turn = {"id": retained[-1], "status": "completed", "items": []} if retained else None
             notify("item/completed", {"threadId":thread["id"],"turnId":removed["turnId"],"item":removed["item"]})
+            if method == "thread/revert":
+                settings["collaborationMode"] = {"mode":"plan", "settings":{"model":settings["model"],"reasoning_effort":settings["effort"],"developer_instructions":None}}
+                notify("thread/settings/updated", {"threadId":thread["id"],"threadSettings":settings})
             reply(request, {"thread": thread})
             if method == "thread/revert":
                 notify("thread/reverted", {"threadId": thread["id"]})
