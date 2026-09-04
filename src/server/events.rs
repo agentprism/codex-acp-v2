@@ -223,12 +223,41 @@ impl Server {
             Some(id) => self.owner_for_thread(id).await?,
             None => None,
         };
+        let root_session = {
+            let state = self.state.lock().await;
+            session_id
+                .as_ref()
+                .and_then(|id| state.sessions.get(id))
+                .cloned()
+        };
+        // Serialize callback insertion with close's `closing` transition. No State lock
+        // is held while acquiring session data, so teardown and ancestry reads stay live.
+        let root_data = match &root_session {
+            Some(session) => Some(session.data.lock().await),
+            None => None,
+        };
+        if root_data
+            .as_ref()
+            .is_some_and(|data| !data.open || data.closing)
+        {
+            drop(root_data);
+            self.backend
+                .respond(
+                    id,
+                    Err(callback_error(
+                        "session is closing; client interaction cancelled",
+                    )),
+                )
+                .await?;
+            return Ok(());
+        }
         let mut state = self.state.lock().await;
         let owned = session_id
             .as_ref()
             .is_some_and(|id| state.sessions.contains_key(id));
         if !owned && !(source_thread.is_none() && self.options.allow_host_methods) {
             drop(state);
+            drop(root_data);
             self.backend
                 .respond(
                     id,
@@ -241,6 +270,7 @@ impl Server {
         }
         if state.pending.len() >= 128 {
             drop(state);
+            drop(root_data);
             self.backend
                 .respond(
                     id,
@@ -263,6 +293,7 @@ impl Server {
             Ok(interaction) => interaction,
             Err(error) => {
                 drop(state);
+                drop(root_data);
                 self.backend
                     .respond(id, Err(callback_error(&error.to_string())))
                     .await?;
@@ -296,17 +327,9 @@ impl Server {
             .and_then(Value::as_bool)
             .unwrap_or(true)
             && !params.get("turnId").is_some_and(Value::is_null);
-        let foreground = if let Some(session_id) = &session_id {
-            self.session(session_id)
-                .await?
-                .data
-                .lock()
-                .await
-                .active_turn
-                .is_some()
-        } else {
-            false
-        };
+        let foreground = root_data
+            .as_ref()
+            .is_some_and(|data| data.active_turn.is_some());
         if blocking
             && foreground
             && let Some(session_id) = &session_id
@@ -320,6 +343,7 @@ impl Server {
             )
             .await?;
         }
+        drop(root_data);
         let server = self.clone();
         let callback_connection = connection.clone();
         connection.spawn(async move {
@@ -356,7 +380,10 @@ impl Server {
                     .pending
                     .values()
                     .any(|pending| pending.session_id.as_ref() == Some(id));
-                if !pending && session.data.lock().await.active_turn.is_some() {
+                let data = session.data.lock().await;
+                let running = !data.closing && data.active_turn.is_some();
+                drop(data);
+                if !pending && running {
                     server
                         .send_update(
                             &callback_connection,
