@@ -23,7 +23,7 @@ class ResponsesHandler(BaseHTTPRequestHandler):
         print(json.dumps({"path": self.path, "model": request["model"], "markerCount": marker_count}), flush=True)
         events = [
             {"type": "response.created", "response": {"id": "smoke-response"}},
-            {"type": "response.output_item.done", "item": {"type": "message", "role": "assistant", "id": "smoke-message", "phase": "final", "content": [{"type": "output_text", "text": "Local Responses smoke succeeded."}]}},
+            {"type": "response.output_item.done", "item": {"type": "message", "role": "assistant", "id": "smoke-message", "phase": "final_answer", "content": [{"type": "output_text", "text": "Local Responses smoke succeeded."}]}},
             {"type": "response.completed", "response": {"id": "smoke-response", "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15, "input_tokens_details": None, "output_tokens_details": None}}},
         ]
         body = "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events).encode()

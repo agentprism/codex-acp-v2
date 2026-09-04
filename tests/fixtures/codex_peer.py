@@ -26,11 +26,14 @@ turn_count = 0
 history = []
 last_turn_params = None
 pending_callback = None
+subscribed = False
+child_active = False
+child_turn = "child-turn"
 
 
 def complete_turn(text="done", status="completed"):
     global active_turn
-    item = {"type": "agentMessage", "id": f"answer-{active_turn}", "text": text, "phase": "final"}
+    item = {"type": "agentMessage", "id": f"answer-{active_turn}", "text": text, "phase": "final_answer"}
     if status == "completed":
         notify("item/agentMessage/delta", {"threadId": thread["id"], "turnId": active_turn, "itemId": item["id"], "delta": text})
         notify("item/completed", {"threadId": thread["id"], "turnId": active_turn, "item": item})
@@ -77,15 +80,28 @@ for line in sys.stdin:
         if method == "model/list":
             reply(request, {"data": [{"id": "model-a", "model": "model-a", "displayName": "Model A", "defaultReasoningEffort": "medium", "supportedReasoningEfforts": [{"reasoningEffort": "medium", "description": "balanced"}, {"reasoningEffort": "high", "description": "thorough"}]}], "nextCursor": None})
         elif method == "thread/start":
+            subscribed = True
             thread = {"id": "session-1", "cwd": params["cwd"], "status": {"type": "idle"}, "turns": [], "createdAt": 1, "updatedAt": 2, "name": "Fixture", "preview": "", "creationParams": params}
             settings = {"model": "model-a", "reasoningEffort": "medium", "effort": "medium", "approvalPolicy": "on-request", "sandbox": {"type": "readOnly"}, "sandboxPolicy": {"type": "readOnly"}, "serviceTier": None, "cwd": params["cwd"]}
             notify("thread/started", {"thread": thread})
             reply(request, {"thread": thread, **settings})
         elif method == "thread/read":
-            reply(request, {"thread": thread, "lastTurnParams": last_turn_params})
+            if params["threadId"] == "child":
+                reply(request, {"thread": {"id": "child", "parentThreadId": thread["id"], "cwd": thread["cwd"], "status": {"type": "active" if child_active else "idle"}}})
+            elif params["threadId"] == "unrelated":
+                reply(request, {"thread": {"id": "unrelated", "parentThreadId": None, "cwd": thread["cwd"], "status": {"type": "idle"}}})
+            else:
+                reply(request, {"thread": thread, "lastTurnParams": last_turn_params})
         elif method == "thread/list":
             reply(request, {"data": [thread] if thread else [], "nextCursor": None})
+        elif method == "thread/loaded/list":
+            reply(request, {"data": ([thread["id"]] if thread else []) + (["child"] if thread and thread.get("childSubscribed") else []), "nextCursor": None})
+        elif method == "thread/turns/list":
+            reply(request, {"data": [{"id": child_turn, "status": "inProgress" if child_active else "completed", "items": []}], "nextCursor": None})
         elif method == "thread/resume":
+            assert not subscribed, "resume overrides require unsubscribing the existing thread first"
+            subscribed = True
+            thread["resumeParams"] = params
             reply(request, {"thread": thread, **settings})
         elif method == "thread/items/list":
             reply(request, {"data": history, "nextCursor": None})
@@ -119,12 +135,25 @@ for line in sys.stdin:
                 elif text == "dynamic":
                     pending_callback = 700
                     send({"id": pending_callback, "method": "item/tool/call", "params": {"threadId": thread["id"], "turnId": active_turn, "callId": "dynamic-1", "tool": "client_lookup", "arguments": {"query": "value"}}})
+                elif text == "child":
+                    child_active = True
+                    thread["childSubscribed"] = True
+                    pending_callback = 800
+                    notify("turn/started", {"threadId": "child", "turn": {"id": "child-turn", "status": "inProgress", "items": []}})
+                    send({"id": pending_callback, "method": "item/commandExecution/requestApproval", "params": {"threadId": "child", "turnId": "child-turn", "itemId": "child-tool", "command": "echo child", "cwd": thread["cwd"], "availableDecisions": ["accept", "decline", "cancel"]}})
                 elif text != "long":
                     complete_turn(text)
         elif method == "turn/steer":
             assert params["expectedTurnId"] == active_turn
             reply(request, {"turnId": active_turn})
         elif method == "turn/interrupt":
+            if params["threadId"] == "child":
+                assert params["turnId"] == child_turn
+                child_active = False
+                thread["childInterrupted"] = True
+                reply(request, {})
+                notify("turn/completed", {"threadId": "child", "turn": {"id": child_turn, "status": "interrupted", "items": []}})
+                continue
             assert params["turnId"] == active_turn
             reply(request, {})
             complete_turn(status="interrupted")
@@ -133,14 +162,37 @@ for line in sys.stdin:
                 result = {"error": request["error"]}
             else:
                 result = request["result"]
+            if pending_callback == 800:
+                child_active = False
+                notify("fixture/childCallback", {"threadId": thread["id"], "requestId": request["id"], "response": result})
+                notify("turn/completed", {"threadId": "child", "turn": {"id": "child-turn", "status": "completed", "items": []}})
+                pending_callback = 801
+                send({"id": pending_callback, "method": "item/commandExecution/requestApproval", "params": {"threadId": "unrelated", "turnId": "unrelated-turn", "itemId": "unrelated-tool", "command": "echo unrelated", "cwd": thread["cwd"], "availableDecisions": ["accept", "decline", "cancel"]}})
+                continue
+            if pending_callback == 801:
+                notify("fixture/unrelatedDenied", {"threadId": thread["id"], "response": result})
+                pending_callback = None
+                continue
             notify("fixture/callback", {"threadId": thread["id"], "response": result})
             pending_callback = None
             if active_turn is not None and result != {"decision": "cancel"}:
                 complete_turn(json.dumps(result, sort_keys=True))
         elif method in ("thread/backgroundTerminals/clean", "thread/unsubscribe", "thread/archive"):
+            if method == "thread/unsubscribe":
+                if params["threadId"] == "child":
+                    thread["childSubscribed"] = False
+                else:
+                    subscribed = False
             reply(request, {})
         elif method == "thread/goal/set":
             reply(request, {"goal": params, "opaque": {"preserved": True}})
+        elif method == "thread/goal/get":
+            reply(request, {"goal": None})
+            if active_turn is not None:
+                complete_turn("child work finished")
+                child_turn = "child-background-turn"
+                child_active = True
+                notify("turn/started", {"threadId": "child", "turn": {"id": child_turn, "status": "inProgress", "items": []}})
         else:
             send({"id": request["id"], "error": {"code": -32601, "message": f"fixture does not implement {method}"}})
     else:

@@ -240,10 +240,15 @@ async fn installed_codex_supports_real_protocol_catalog_and_session_lifecycle() 
         .env("CODEX_HOME", profile)
         .env_remove("OPENAI_API_KEY")
         .env_remove("CODEX_API_KEY");
+    let provider_config = json!({"name":"Local smoke","base_url":provider_url,"wire_api":"responses","requires_openai_auth":false,"supports_websockets":false});
+    for (key, value) in provider_config.as_object().unwrap() {
+        command
+            .arg("--codex-arg=-c")
+            .arg(format!("--codex-arg=model_providers.smoke.{key}={value}"));
+    }
     let mut client = Client::connect(command, directory, true).await;
     let id = client
-        .new_session(json!({"sandbox":"read-only","approvalPolicy":"never","model":"smoke-model","modelProvider":"smoke",
-            "config":{"model_providers.smoke":{"name":"Local smoke","base_url":provider_url,"wire_api":"responses","requires_openai_auth":false,"supports_websockets":false}}}))
+        .new_session(json!({"sandbox":"read-only","approvalPolicy":"never","model":"smoke-model","modelProvider":"smoke"}))
         .await;
     let read = client.rpc("_codex/request", json!({"version":1,"sessionId":id,"method":"thread/read","params":{"threadId":id,"includeTurns":false}})).await;
     assert_eq!(read["thread"]["id"], id);
@@ -277,7 +282,31 @@ async fn installed_codex_supports_real_protocol_catalog_and_session_lifecycle() 
             json!({"sessionId":id,"cwd":client.directory.path(),"mcpServers":[]}),
         )
         .await;
-    client.rpc("session/close", json!({"sessionId":id})).await;
+    let fork = client
+        .rpc(
+            "session/fork",
+            json!({"sessionId":id,"cwd":client.directory.path(),"mcpServers":[]}),
+        )
+        .await;
+    assert_ne!(
+        fork["sessionId"], id,
+        "fork must create an independent Codex thread"
+    );
+    client
+        .rpc("session/close", json!({"sessionId":fork["sessionId"]}))
+        .await;
+    client.rpc("session/delete", json!({"sessionId":id})).await;
+    let listed = client
+        .rpc("session/list", json!({"cwd":client.directory.path()}))
+        .await;
+    assert!(
+        !listed["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|session| session["sessionId"] == id),
+        "soft-deleted sessions must disappear from the standard listing"
+    );
     client.shutdown().await;
     provider.kill().await.unwrap();
 }
@@ -373,6 +402,22 @@ async fn standard_lifecycle_streams_approvals_cancels_and_replays_without_feedin
             .iter()
             .any(|frame| frame["params"]["update"]["sessionUpdate"] == "agent_message"),
         "resume without replayFrom must not replay history"
+    );
+    let additional = client.directory.path().join("additional-root");
+    client.rpc("session/resume", json!({"sessionId":id,"cwd":client.directory.path(),"additionalDirectories":[additional],"mcpServers":[{"type":"stdio","name":"client_context","command":"context-tool","args":["serve"],"env":[{"name":"MODE","value":"test"}]}]})).await;
+    let read = client
+        .rpc(
+            "_codex/request",
+            json!({"version":1,"sessionId":id,"method":"thread/read","params":{"threadId":id}}),
+        )
+        .await;
+    assert_eq!(
+        read["thread"]["resumeParams"]["runtimeWorkspaceRoots"],
+        json!([client.directory.path(), additional])
+    );
+    assert_eq!(
+        read["thread"]["resumeParams"]["config"]["mcp_servers"],
+        json!({"client_context":{"command":"context-tool","args":["serve"],"env":{"MODE":"test"}}})
     );
     client.rpc("session/close", json!({"sessionId":id})).await;
     client.backlog.clear();
@@ -497,6 +542,83 @@ async fn extensions_are_negotiated_bidirectional_and_share_authoritative_session
     );
     client.matching(|frame| is_state(frame, "idle")).await;
 
+    client.backlog.clear();
+    client
+        .rpc(
+            "session/prompt",
+            json!({"sessionId":id,"prompt":[{"type":"text","text":"child"}]}),
+        )
+        .await;
+    let permission = client
+        .matching(|frame| frame["method"] == "session/request_permission")
+        .await;
+    assert_eq!(
+        permission["params"]["sessionId"], id,
+        "verified child approvals belong to the ACP root session"
+    );
+    let decline = permission["params"]["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|option| option["kind"] == "reject_once")
+        .unwrap()["optionId"]
+        .clone();
+    client.send(json!({"jsonrpc":"2.0","id":permission["id"],"result":{"outcome":{"outcome":"selected","optionId":decline}}})).await;
+    let child_response = client
+        .matching(|frame| {
+            frame["method"] == "_codex/event"
+                && frame["params"]["method"] == "fixture/childCallback"
+        })
+        .await;
+    assert_eq!(
+        child_response["params"]["params"],
+        json!({"threadId":id,"requestId":800,"response":{"decision":"decline"}})
+    );
+    let rejected = client
+        .matching(|frame| {
+            frame["method"] == "_codex/event"
+                && frame["params"]["method"] == "fixture/unrelatedDenied"
+        })
+        .await;
+    assert!(
+        rejected["params"]["params"]["response"]
+            .get("error")
+            .is_some(),
+        "an unrelated thread callback must not be approved or forwarded"
+    );
+    assert!(
+        !client.backlog.iter().any(|frame| is_state(frame, "idle")),
+        "child completion must not finish root foreground work"
+    );
+    assert!(
+        !client
+            .backlog
+            .iter()
+            .any(|frame| frame["method"] == "session/request_permission"),
+        "unrelated callback must not appear in the root session"
+    );
+    assert!(
+        client
+            .backlog
+            .iter()
+            .filter(|frame| is_state(frame, "running"))
+            .count()
+            <= 2,
+        "child lifecycle must not emit additional root running transitions"
+    );
+    let child = client.rpc("_codex/request", json!({"version":1,"sessionId":id,"method":"thread/read","params":{"threadId":"child"}})).await;
+    assert_eq!(
+        child["thread"]["id"], "child",
+        "authorized child history requests must preserve their backend target"
+    );
+    client
+        .rpc(
+            "_codex/request",
+            json!({"version":1,"sessionId":id,"method":"thread/goal/get","params":{"threadId":id}}),
+        )
+        .await;
+    client.matching(|frame| is_state(frame, "idle")).await;
+
     // Complete-before-accept must not resurrect a finished turn and steer the next prompt.
     for _ in 0..2 {
         client
@@ -508,5 +630,19 @@ async fn extensions_are_negotiated_bidirectional_and_share_authoritative_session
         client.matching(|frame| is_state(frame, "idle")).await;
     }
     client.rpc("session/close", json!({"sessionId":id})).await;
+    let threads = client
+        .rpc(
+            "_codex/request",
+            json!({"version":1,"method":"thread/list","params":{}}),
+        )
+        .await;
+    assert_eq!(
+        threads["data"][0]["childSubscribed"], false,
+        "closing the root must unsubscribe its verified descendants"
+    );
+    assert_eq!(
+        threads["data"][0]["childInterrupted"], true,
+        "closing the root must stop outstanding child foreground work"
+    );
     client.shutdown().await;
 }
