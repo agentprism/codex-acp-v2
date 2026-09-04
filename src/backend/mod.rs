@@ -1,10 +1,12 @@
 //! Bounded, bidirectional JSON-lines transport to a Codex-owned child process.
 
+mod executable;
 mod transport;
+
+pub use executable::BackendExecutable;
 
 use std::collections::HashMap;
 use std::ffi::OsString;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -13,10 +15,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot, watch};
 
-/// Process and resource limits. Extra arguments precede `app-server --stdio`.
+/// Process and resource limits. Extra arguments precede the selected transport flags.
 #[derive(Clone, Debug)]
 pub struct BackendOptions {
-    pub executable: PathBuf,
+    pub executable: BackendExecutable,
     pub args: Vec<OsString>,
     pub request_timeout: Duration,
     pub max_frame_bytes: usize,
@@ -30,7 +32,7 @@ pub struct BackendOptions {
 impl Default for BackendOptions {
     fn default() -> Self {
         Self {
-            executable: PathBuf::from("codex"),
+            executable: BackendExecutable::Bundled,
             args: Vec::new(),
             request_timeout: Duration::from_secs(120),
             max_frame_bytes: 8 * 1024 * 1024,

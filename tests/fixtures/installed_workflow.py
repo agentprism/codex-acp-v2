@@ -1,5 +1,6 @@
 """Opt-in actual Codex workflow. All state and files are isolated; no paid inference."""
 
+import argparse
 import base64
 import json
 import os
@@ -49,6 +50,7 @@ class Model(BaseHTTPRequestHandler):
     parent_requests = []
     cancellation_started = threading.Event()
     cancellation_done = threading.Event()
+    bundled_resources = False
 
     def log_message(self, *_args):
         pass
@@ -96,7 +98,10 @@ class Model(BaseHTTPRequestHandler):
         stage = Model.phase
         Model.phase += 1
         if stage == 0:
-            item = function("exec-fixture", "exec_command", {"cmd": "echo command-ok", "sandbox_permissions": "require_escalated", "justification": "Execute the harmless isolated integration echo", "yield_time_ms": 1000})
+            command = "echo command-ok"
+            if Model.bundled_resources:
+                command += "; command -v rg; rg --version"
+            item = function("exec-fixture", "exec_command", {"cmd": command, "sandbox_permissions": "require_escalated", "justification": "Execute the harmless isolated integration echo", "yield_time_ms": 1000})
         elif stage == 1:
             item = function("patch-fixture", "exec_command", {"cmd": "apply_patch <<'PATCH'\n*** Begin Patch\n*** Add File: workflow.txt\n+patch-ok\n*** End Patch\nPATCH", "yield_time_ms": 1000})
         elif stage == 2:
@@ -145,7 +150,7 @@ def message(item_id, text):
 
 
 class Client:
-    def __init__(self, binary, directory, url):
+    def __init__(self, binary, directory, url, codex_path=None):
         self.events = []
         self.approvals = []
         self.callbacks = []
@@ -158,19 +163,38 @@ class Client:
         environment["CODEX_HOME"] = str(directory / "profile")
         environment.pop("OPENAI_API_KEY", None)
         environment.pop("CODEX_API_KEY", None)
+        environment.pop("CODEX_PATH", None)
+        environment.pop("CODEX_APP_SERVER_PATH", None)
+        binary = str(Path(binary).resolve())
         args = [binary, "--request-timeout-seconds", "20", "--interaction-timeout-seconds", "20"]
+        if codex_path is not None:
+            args += ["--codex-path", codex_path]
+        else:
+            # An accidental fallback cannot succeed using an installed Codex or
+            # rg. Codex must discover its own sibling package resources.
+            poison = directory / "poison-path"
+            poison.mkdir()
+            for name in ("codex", "rg"):
+                executable = poison / (name + (".exe" if os.name == "nt" else ""))
+                executable.write_bytes(b"intentional invalid executable: PATH fallback is forbidden\n")
+                executable.chmod(0o755)
+            environment["PATH"] = str(poison) + os.pathsep + environment.get("PATH", "")
         config = {"name": "Workflow local mock", "base_url": url, "wire_api": "responses", "requires_openai_auth": False, "supports_websockets": False, "request_max_retries": 0, "stream_max_retries": 0}
         for key, value in config.items():
             args += ["--codex-arg=-c", f"--codex-arg=model_providers.workflow.{key}={json.dumps(value)}"]
         args += ["--codex-arg=-c", "--codex-arg=features.code_mode=false", "--codex-arg=-c", "--codex-arg=features.unified_exec=true"]
-        self.process = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=None, encoding="utf-8", env=environment, start_new_session=os.name != "nt")
+        self.process = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=None, encoding="utf-8", env=environment, cwd=directory, start_new_session=os.name != "nt")
         threading.Thread(target=self.reader, daemon=True).start()
-        self.rpc("initialize", {"protocolVersion": 2, "info": {"name": "workflow-client", "version": "1"}, "capabilities": {"_meta": {"codex": {"version": 1, "events": [], "serverRequests": True}}}})
+        self.initialized = self.rpc("initialize", {"protocolVersion": 2, "info": {"name": "workflow-client", "version": "1"}, "capabilities": {"_meta": {"codex": {"version": 1, "events": [], "serverRequests": True}}}})
 
     def reader(self):
-        for line in self.process.stdout:
-            self.frames.put(json.loads(line))
-        self.frames.put(None)
+        try:
+            for line in self.process.stdout:
+                self.frames.put(json.loads(line))
+        except (OSError, ValueError) as error:
+            self.frames.put(error)
+        finally:
+            self.frames.put(None)
 
     def send(self, value):
         self.process.stdin.write(json.dumps(value) + "\n")
@@ -181,6 +205,8 @@ class Client:
             frame = self.frames.get(timeout=30)
         except queue.Empty:
             raise AssertionError(f"timed out; recent ACP activity: {self.events[-12:]}") from None
+        if isinstance(frame, Exception):
+            raise AssertionError(f"adapter stdout was not valid JSONL: {frame}") from frame
         assert frame is not None, f"adapter exited: {self.process.poll()}"
         if frame.get("method", "").startswith("mcp/"):
             self.mcp_message(frame)
@@ -263,7 +289,8 @@ class Client:
         assert self.process.wait(timeout=15) == 0
 
 
-def workflow(binary):
+def workflow(binary, codex_path=None):
+    Model.bundled_resources = codex_path is None
     server = ThreadingHTTPServer(("127.0.0.1", 0), Model)
     server.daemon_threads = True
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -272,7 +299,7 @@ def workflow(binary):
         (directory / "profile").mkdir()
         workspace = directory / "workspace"
         workspace.mkdir()
-        client = Client(binary, directory, f"http://127.0.0.1:{server.server_port}/v1")
+        client = Client(binary, directory, f"http://127.0.0.1:{server.server_port}/v1", codex_path)
         try:
             options = {"model": "workflow-model", "modelProvider": "workflow", "sandbox": "read-only", "approvalPolicy": "on-request", "dynamicTools": [{"type": "function", "name": "audit_client", "description": "Integration client callback", "inputSchema": {"type": "object", "properties": {"mode": {"type": "string"}}, "required": ["mode"]}}]}
             mcp = [
@@ -299,6 +326,10 @@ def workflow(binary):
             assert any(change["operation"] == "add" and change["path"] == str(workspace / "workflow.txt") for patch in patches for change in patch["changes"]), patches
             outputs = {item["call_id"]: item["output"] for item in Model.parent_requests[-1]["input"] if item.get("type") == "function_call_output"}
             assert "command-ok" in outputs["exec-fixture"] and "A workflow.txt" in outputs["patch-fixture"], outputs
+            if codex_path is None:
+                bundled_rg = str(Path(binary).resolve().parent / "codex" / "codex-path" / "rg")
+                assert bundled_rg in outputs["exec-fixture"], outputs["exec-fixture"]
+                assert "ripgrep " in outputs["exec-fixture"], outputs["exec-fixture"]
             assert outputs["dynamic-ok"] == "dynamic-ok" and outputs["dynamic-error"] == "dynamic tool request failed", outputs
             assert '"received":"from-codex"' in outputs["mcp-fixture"], outputs
             assert '"received":"native-from-codex"' in outputs["native-mcp-fixture"], outputs
@@ -341,4 +372,8 @@ if __name__ == "__main__":
     if sys.argv[1] == "--mcp":
         mcp_peer()
     else:
-        workflow(sys.argv[1])
+        parser = argparse.ArgumentParser(description=__doc__)
+        parser.add_argument("binary")
+        parser.add_argument("--codex-path", help="Use an installed full Codex CLI instead of the packaged default")
+        arguments = parser.parse_args()
+        workflow(arguments.binary, arguments.codex_path)

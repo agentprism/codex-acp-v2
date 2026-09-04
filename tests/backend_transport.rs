@@ -2,13 +2,19 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use codex_acp_v2::backend::{Backend, BackendError, BackendEvent, BackendOptions};
+use codex_acp_v2::backend::{
+    Backend, BackendError, BackendEvent, BackendExecutable, BackendOptions,
+};
 use serde_json::json;
 use tokio::sync::mpsc;
 
 fn options(scenario: &str) -> BackendOptions {
     BackendOptions {
-        executable: PathBuf::from(if cfg!(windows) { "python" } else { "python3" }),
+        executable: BackendExecutable::CodexCli(PathBuf::from(if cfg!(windows) {
+            "python"
+        } else {
+            "python3"
+        })),
         args: vec![
             OsString::from(concat!(
                 env!("CARGO_MANIFEST_DIR"),
@@ -27,6 +33,31 @@ async fn event(events: &mut mpsc::Receiver<BackendEvent>) -> BackendEvent {
         .await
         .unwrap()
         .unwrap()
+}
+
+#[tokio::test]
+async fn explicit_backend_kinds_preserve_arguments_and_select_the_correct_stdio_contract() {
+    let python = PathBuf::from(if cfg!(windows) { "python" } else { "python3" });
+    for (executable, expected) in [
+        (
+            BackendExecutable::CodexCli(python.clone()),
+            json!({"arguments":["fixture-value", "app-server", "--stdio"]}),
+        ),
+        (
+            BackendExecutable::AppServer(python),
+            json!({"arguments":["fixture-value", "--listen", "stdio://"]}),
+        ),
+    ] {
+        let mut config = options("launch");
+        config.executable = executable;
+        config.args.push("fixture-value".into());
+        let (backend, _events) = Backend::spawn(config).await.unwrap();
+        assert_eq!(
+            backend.request("arguments", json!({})).await.unwrap(),
+            expected
+        );
+        backend.shutdown().await.unwrap();
+    }
 }
 
 #[tokio::test]

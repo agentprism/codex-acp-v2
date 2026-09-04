@@ -71,6 +71,9 @@ for line in sys.stdin:
         initialized = True
     elif not initialized:
         raise RuntimeError("request arrived before initialized")
+    elif scenario == "launch":
+        assert method == "arguments"
+        reply(request, {"arguments": sys.argv[2:]})
     elif scenario == "transport":
         if method == "exercise":
             notify("thread/started", {"thread": {"id": "thread-1"}})

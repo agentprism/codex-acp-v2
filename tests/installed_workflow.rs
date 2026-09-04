@@ -11,6 +11,8 @@ fn installed_codex_executes_tools_callbacks_mcp_and_replays_actual_history() {
             "/tests/fixtures/installed_workflow.py"
         ))
         .arg(env!("CARGO_BIN_EXE_codex-acp-v2"))
+        .arg("--codex-path")
+        .arg(std::env::var_os("CODEX_PATH").unwrap_or_else(|| "codex".into()))
         .status()
         .expect("start isolated installed-Codex workflow");
     assert!(

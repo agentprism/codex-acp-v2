@@ -1,7 +1,7 @@
 use std::process::Stdio;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::task::JoinHandle;
 
 use super::*;
@@ -22,19 +22,15 @@ pub(super) async fn spawn(
         .as_object_mut()
         .ok_or_else(|| BackendError::Configuration("capabilities must be an object".into()))?;
     capabilities.insert("experimentalApi".into(), Value::Bool(true));
-    let mut child = Command::new(&options.executable)
-        .args(&options.args)
-        .args(["app-server", "--stdio"])
+    let (executable, mut command) = options.executable.command(&options.args)?;
+    let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .kill_on_drop(true)
         .spawn()
         .map_err(|error| {
-            BackendError::Io(format!(
-                "could not spawn {}: {error}",
-                options.executable.display()
-            ))
+            BackendError::Io(format!("could not spawn {}: {error}", executable.display()))
         })?;
     let stdin = child
         .stdin

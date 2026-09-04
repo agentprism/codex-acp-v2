@@ -55,6 +55,7 @@ impl Client {
 
     async fn connect(mut command: Command, directory: tempfile::TempDir, negotiated: bool) -> Self {
         let mut child = command
+            .env_remove("CODEX_APP_SERVER_PATH")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -616,6 +617,8 @@ async fn installed_codex_supports_real_protocol_catalog_and_session_lifecycle() 
     let mut command = Command::new(env!("CARGO_BIN_EXE_codex-acp-v2"));
     command
         .args(["--request-timeout-seconds", "20"])
+        .arg("--codex-path")
+        .arg(std::env::var_os("CODEX_PATH").unwrap_or_else(|| "codex".into()))
         .env("CODEX_HOME", profile)
         .env_remove("OPENAI_API_KEY")
         .env_remove("CODEX_API_KEY");
