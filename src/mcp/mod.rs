@@ -2,12 +2,14 @@
 //! Codex through bounded, token-protected loopback Streamable HTTP endpoints.
 
 mod http;
+mod listener;
 mod resources;
 pub use resources::McpLeases;
 
 use agent_client_protocol::{Client, Error, V2ConnectionTo, schema::v2};
 use anyhow::{Context, Result, ensure};
-use resources::Lease;
+use listener::Listener;
+use resources::{Lease, ProviderLease};
 use serde_json::{Value, json, value::to_raw_value};
 use std::{
     collections::HashMap,
@@ -45,13 +47,11 @@ pub struct PreparedMcp {
 struct Endpoint {
     connection_id: v2::McpConnectionId,
     http_session_id: String,
-    http_initialized: AtomicBool,
     client: V2ConnectionTo<Client>,
     outgoing: mpsc::Sender<Value>,
     incoming: Mutex<mpsc::Receiver<Value>>,
     pending: std::sync::Mutex<HashMap<String, Reply>>,
     next_id: AtomicU64,
-    requests: Semaphore,
     streams: Arc<Semaphore>,
     shutdown: watch::Sender<bool>,
     disconnected: AtomicBool,
@@ -71,7 +71,8 @@ impl McpManager {
     }
 
     /// Preserve ordinary transports; replace each native declaration with an
-    /// isolated HTTP endpoint and a fresh provider-side MCP connection.
+    /// isolated HTTP listener. Each HTTP initialization opens its own provider
+    /// connection, including when Codex subagents inherit the listener URL.
     pub async fn prepare(
         &self,
         servers: &[v2::McpServer],
@@ -116,32 +117,31 @@ impl McpManager {
         declaration: &Value,
         client: &V2ConnectionTo<Client>,
     ) -> Result<(String, Lease)> {
-        let manager = self.clone();
-        let declaration = declaration.clone();
-        let client = client.clone();
-        // Cancellation after a provider allocates its connection must still run
-        // registration to completion: the undelivered result's lease cleans up.
-        tokio::spawn(async move { manager.open_inner(&declaration, &client).await })
-            .await
-            .context("native MCP connection task failed")?
-    }
-
-    async fn open_inner(
-        &self,
-        declaration: &Value,
-        client: &V2ConnectionTo<Client>,
-    ) -> Result<(String, Lease)> {
         let server_id = declaration["serverId"]
             .as_str()
             .context("native MCP server missing serverId")?;
+        let socket = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+        let address = socket.local_addr()?;
+        let token = uuid::Uuid::new_v4().simple().to_string();
+        let listener = Arc::new(Listener::new(self.clone(), client.clone(), server_id));
+        let task = tokio::spawn(http::serve(socket, token.clone(), listener.clone()));
+        Ok((
+            format!("http://{address}/{token}"),
+            Lease::new(listener, task),
+        ))
+    }
+
+    async fn connect(
+        &self,
+        server_id: &str,
+        client: &V2ConnectionTo<Client>,
+        listener_permit: tokio::sync::OwnedSemaphorePermit,
+    ) -> Result<ProviderLease> {
         let permit = self
             .slots
             .clone()
             .try_acquire_owned()
             .context("native MCP connection limit reached")?;
-        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
-        let address = listener.local_addr()?;
-        let token = uuid::Uuid::new_v4().simple().to_string();
         self.connecting.fetch_add(1, Ordering::SeqCst);
         let _connecting = Connecting(self.clone());
         let connected = tokio::time::timeout(
@@ -163,13 +163,11 @@ impl McpManager {
         let endpoint = Arc::new(Endpoint {
             connection_id: connected.connection_id,
             http_session_id: uuid::Uuid::new_v4().simple().to_string(),
-            http_initialized: AtomicBool::new(false),
             client: client.clone(),
             outgoing,
             incoming: Mutex::new(incoming),
             pending: std::sync::Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
-            requests: Semaphore::new(32),
             streams: Arc::new(Semaphore::new(1)),
             shutdown,
             disconnected: AtomicBool::new(false),
@@ -179,10 +177,11 @@ impl McpManager {
         endpoints.insert(endpoint.connection_id.to_string(), endpoint.clone());
         drop(endpoints);
         self.changed.notify_waiters();
-        let task = tokio::spawn(http::serve(listener, token.clone(), endpoint.clone()));
-        Ok((
-            format!("http://{address}/{token}"),
-            Lease::new(endpoint, task, self.clone(), permit),
+        Ok(ProviderLease::new(
+            endpoint,
+            self.clone(),
+            permit,
+            listener_permit,
         ))
     }
 
@@ -237,7 +236,7 @@ impl McpManager {
         let value = tokio::select! {
             value = tokio::time::timeout(endpoint.timeout, response) => value
                 .map_err(|_| Error::new(-32000, "native MCP reverse request timed out"))?
-                .map_err(|_| Error::new(-32000, "native MCP connection closed"))??,
+                .map_err(|_| Error::new(-32800, "native MCP connection closed"))??,
             _ = shutdown.wait_for(|closed| *closed) => return Err(Error::new(-32800, "native MCP connection closed")),
         };
         Ok(v2::MessageMcpResponse::new(Arc::from(to_raw_value(
@@ -261,23 +260,26 @@ impl McpManager {
 
 impl Endpoint {
     fn publish(self: &Arc<Self>, message: Value) -> Result<(), Error> {
-        if serde_json::to_vec(&message)?.len() > MAX_FRAME {
-            return Err(Error::new(-32000, "native MCP frame exceeds 1 MiB"));
-        }
         if *self.shutdown.borrow() {
             return Err(Error::new(-32800, "native MCP connection closed"));
         }
-        self.outgoing.try_send(message).map_err(|_| {
+        let failure = if serde_json::to_vec(&message)?.len() > MAX_FRAME {
+            Some("native MCP frame exceeds 1 MiB; connection closed")
+        } else {
+            self.outgoing
+                .try_send(message)
+                .err()
+                .map(|_| "native MCP event queue exhausted; connection closed")
+        };
+        if let Some(message) = failure {
             self.shutdown.send_replace(true);
             let endpoint = self.clone();
             tokio::spawn(async move {
                 let _ = endpoint.disconnect().await;
             });
-            Error::new(
-                -32000,
-                "native MCP event queue exhausted; connection closed",
-            )
-        })
+            return Err(Error::new(-32000, message));
+        }
+        Ok(())
     }
 
     async fn disconnect(self: &Arc<Self>) -> Result<()> {

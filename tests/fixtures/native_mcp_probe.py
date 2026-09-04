@@ -8,9 +8,12 @@ import sys
 import threading
 import urllib.parse
 
+output_lock = threading.Lock()
+
 
 def emit(message):
-    print(json.dumps(message), flush=True)
+    with output_lock:
+        print(json.dumps(message), flush=True)
 
 
 class HttpMcp:
@@ -21,6 +24,7 @@ class HttpMcp:
         self.session = None
         self.notified = threading.Event()
         self.errors = queue.Queue()
+        self.thread_id = None
 
     def post(self, frame):
         connection = http.client.HTTPConnection(self.url.hostname, self.url.port, timeout=8)
@@ -46,6 +50,9 @@ class HttpMcp:
                     continue
                 frame = json.loads(line[5:].strip())
                 if frame.get("method") == "sampling/createMessage":
+                    if frame["params"].get("hold"):
+                        emit({"method": "fixture/reverseHeld", "params": {"threadId": self.thread_id}})
+                        continue
                     assert frame["params"] == {"maxTokens": 1, "messages": []}
                     self.post({"jsonrpc": "2.0", "id": frame["id"], "error": {"code": -32055, "message": "sampling denied", "data": {"scope": "test"}}})
                 elif frame.get("method") == "notifications/tools/list_changed":
@@ -56,6 +63,14 @@ class HttpMcp:
         except Exception as error:
             self.errors.put(error)
             self.notified.set()
+
+    def disconnect(self):
+        connection = http.client.HTTPConnection(self.url.hostname, self.url.port, timeout=8)
+        connection.request("DELETE", self.url.path, headers={"Mcp-Session-Id": self.session})
+        response = connection.getresponse()
+        assert response.status == 204, response.status
+        response.read()
+        connection.close()
 
     def exercise(self):
         initialized = self.post({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-11-25", "capabilities": {"sampling": {}}, "clientInfo": {"name": "probe", "version": "1"}}})
@@ -85,12 +100,28 @@ def backend():
             result = {"data": [{"model": "test", "displayName": "Test", "supportedReasoningEfforts": []}], "nextCursor": None}
         elif method == "thread/start":
             url = params["config"]["mcp_servers"]["native"]["url"]
+            if params.get("model") == "fail":
+                rejected = HttpMcp(url)
+                response = rejected.post({"jsonrpc": "2.0", "id": "rejected", "method": "initialize", "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "reject-initialization", "version": "1"}}})
+                assert response == {"jsonrpc": "2.0", "id": "rejected", "error": {"code": -32054, "message": "provider initialization denied", "data": {"reason": "probe"}}}
+                assert rejected.session is None, "failed initialize must not retain an HTTP session"
             http = HttpMcp(url)
             http.exercise()
             if params.get("model") == "fail":
                 emit({"id": request["id"], "error": {"code": -32042, "message": "intentional setup failure", "data": {"url": url}}})
                 continue
             index += 1
+            http.thread_id = f"thread-{index}"
+            child = HttpMcp(url)
+            child.exercise()
+            assert child.session != http.session
+            child.disconnect()
+            still_live = http.post({"jsonrpc": "2.0", "id": 4, "method": "tools/list", "params": {}})
+            assert still_live["result"]["tools"][0]["name"] == "echo", "deleting child session disrupted parent"
+            reconnect = HttpMcp(url)
+            reconnect.thread_id = http.thread_id
+            reconnect.exercise()
+            assert reconnect.session not in (http.session, child.session)
             thread = {"id": f"thread-{index}", "cwd": params["cwd"], "status": {"type": "idle"}, "parentThreadId": None, "turns": [], "bridgeUrl": url}
             threads[thread["id"]] = thread
             result = {"thread": thread, "model": "test", "modelProvider": "test", "cwd": params["cwd"], "sandbox": {"type": "readOnly", "networkAccess": False}, "approvalPolicy": "on-request", "reasoningEffort": None}
@@ -122,6 +153,11 @@ def probe(binary):
     connections = []
     disconnected = []
     reverse = {}
+    held = False
+    pending_cancelled = False
+    initializing = False
+    pending_initialize_id = None
+    initialize_cancelled = False
     def send(frame):
         process.stdin.write(json.dumps({"jsonrpc": "2.0", **frame}) + "\n")
         process.stdin.flush()
@@ -130,6 +166,7 @@ def probe(binary):
         assert message is not None, "adapter exited early"
         return message
     def handle(message):
+        nonlocal held, pending_cancelled, initializing, pending_initialize_id, initialize_cancelled
         method, params = message.get("method"), message.get("params", {})
         if method == "mcp/connect":
             assert params["serverId"] == "client-native"
@@ -144,7 +181,14 @@ def probe(binary):
             if "id" not in message:
                 assert params["method"] == "notifications/initialized"
             elif params["method"] == "initialize":
-                send({"id": message["id"], "result": {"protocolVersion": "2025-11-25", "capabilities": {"tools": {"listChanged": True}}, "serverInfo": {"name": "native-provider", "version": "1"}}})
+                name = params.get("params", {}).get("clientInfo", {}).get("name")
+                if name == "hold-initialization":
+                    initializing = True
+                    pending_initialize_id = message["id"]
+                elif name == "reject-initialization":
+                    send({"id": message["id"], "error": {"code": -32054, "message": "provider initialization denied", "data": {"reason": "probe"}}})
+                else:
+                    send({"id": message["id"], "result": {"protocolVersion": "2025-11-25", "capabilities": {"tools": {"listChanged": True}}, "serverInfo": {"name": "native-provider", "version": "1"}}})
             elif params["method"] == "tools/list":
                 send({"id": message["id"], "result": {"tools": [{"name": "echo", "description": "Echo", "inputSchema": {"type": "object"}}]}})
             elif params["method"] == "tools/call":
@@ -159,6 +203,14 @@ def probe(binary):
             original = reverse.pop(message["id"])
             send({"method": "mcp/message", "params": {"connectionId": original["params"]["connectionId"], "method": "notifications/tools/list_changed"}})
             send({"id": original["id"], "result": {"content": [{"type": "text", "text": "native-roundtrip"}]}})
+        elif message.get("id") == "pending-on-close":
+            assert message["error"]["code"] == -32800, message
+            pending_cancelled = True
+        elif method == "$/cancel_request":
+            assert params["requestId"] == pending_initialize_id, message
+            initialize_cancelled = True
+        elif method == "_codex/event" and params["method"] == "fixture/reverseHeld":
+            held = True
         elif method not in ("session/update", "_codex/event"):
             raise AssertionError(message)
     def rpc(method, params):
@@ -185,12 +237,12 @@ def probe(binary):
         finally:
             connection.close()
     try:
-        initialized = rpc("initialize", {"protocolVersion": 2, "info": {"name": "native-probe", "version": "1"}, "capabilities": {"_meta": {"codex": {"version": 1}}}})
+        initialized = rpc("initialize", {"protocolVersion": 2, "info": {"name": "native-probe", "version": "1"}, "capabilities": {"_meta": {"codex": {"version": 1, "events": ["fixture/reverseHeld"]}}}})
         assert "acp" in initialized["result"]["capabilities"]["session"]["mcp"]
         declaration = {"type": "acp", "name": "native", "serverId": "client-native"}
         failed = rpc("session/new", {"cwd": os.getcwd(), "mcpServers": [declaration], "_meta": {"codex": {"thread": {"model": "fail"}}}})
         assert failed["error"]["code"] == -32042
-        await_disconnected(1)
+        await_disconnected(2)
         assert_closed(failed["error"]["data"]["url"])
         created = rpc("session/new", {"cwd": os.getcwd(), "mcpServers": [declaration]})
         session = created["result"]["sessionId"]
@@ -201,14 +253,46 @@ def probe(binary):
         unauthorized.request("GET", "/not-the-secret")
         assert unauthorized.getresponse().status == 404
         unauthorized.close()
+        send({"id": "pending-on-close", "method": "mcp/message", "params": {"connectionId": connections[-1], "method": "sampling/createMessage", "params": {"hold": True}}})
+        while not held:
+            handle(frame())
+        setup_closed = queue.Queue()
+        def unfinished_setup():
+            connection = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=8)
+            try:
+                connection.request("POST", parsed.path, json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "hold-initialization", "version": "1"}}}), {"Content-Type": "application/json"})
+                response = connection.getresponse()
+                response.read()
+                setup_closed.put(response.status)
+            except (ConnectionResetError, http.client.RemoteDisconnected):
+                setup_closed.put(410)
+            finally:
+                connection.close()
+        setup_thread = threading.Thread(target=unfinished_setup, daemon=True)
+        setup_thread.start()
+        while not initializing:
+            handle(frame())
         closed = rpc("session/close", {"sessionId": session})
         assert "result" in closed, closed
-        await_disconnected(2)
+        await_disconnected(6)
+        assert setup_closed.get(timeout=8) == 410, "session close must cancel unfinished MCP initialization"
+        setup_thread.join(timeout=1)
+        while not pending_cancelled:
+            handle(frame())
+        while not initialize_cancelled:
+            handle(frame())
         assert_closed(url)
-        assert len(set(connections)) == 2 and sorted(connections) == sorted(disconnected)
+        missing = rpc("mcp/message", {"connectionId": connections[-1], "method": "tools/list", "params": {}})
+        assert missing["error"]["code"] == -32602, missing
+        assert len(set(connections)) == 6 and sorted(connections) == sorted(disconnected)
+        reopened = rpc("session/new", {"cwd": os.getcwd(), "mcpServers": [declaration]})
+        reopened_id = reopened["result"]["sessionId"]
+        live = rpc("_codex/request", {"version": 1, "sessionId": reopened_id, "method": "thread/read", "params": {"threadId": reopened_id}})
+        live_url = live["result"]["thread"]["bridgeUrl"]
         process.stdin.close()
         assert process.wait(timeout=8) == 0, process.stderr.read()
-        print("native MCP full duplex, consent error fidelity, failed setup/reconnect and close verified")
+        assert_closed(live_url)
+        print("native MCP full duplex, independent child/reconnect sessions, reverse-call cancellation and cleanup verified")
     finally:
         if process.poll() is None:
             process.kill()
