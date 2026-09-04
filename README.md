@@ -30,8 +30,9 @@ separately before launching the adapter.
 | Linux, ARM64 | `aarch64-unknown-linux-musl` | `.tar.gz` |
 | Windows, x86-64 | `x86_64-pc-windows-msvc` | `.zip` |
 
-Linux adapter binaries use static musl linking; the separately installed Codex
-executable has its own system requirements. Intel macOS and native Windows ARM64
+Linux adapter binaries use static musl linking, and Windows binaries statically
+link the MSVC runtime. The separately installed Codex executable has its own
+system requirements. Intel macOS and native Windows ARM64
 releases are not provided. macOS releases are not Developer ID signed or
 notarized, and Windows releases are not Authenticode signed. Operating-system
 security prompts may therefore apply; verify provenance before execution, and

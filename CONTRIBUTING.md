@@ -81,12 +81,14 @@ to a package registry.
    packages documentation/notices/build metadata, and produces SHA256SUMS and
    GitHub provenance attestations. Publication occurs only after all release
    assets are ready. A SemVer prerelease suffix creates a GitHub prerelease.
+   If publication fails after uploads, rerun failed jobs to reuse the exact
+   original archives; the publisher refuses to replace existing asset bytes.
 5. Download the published archives, verify their checksums and provenance, and
    check the release notes and asset list. Never move a published version tag or
    silently replace a released binary. Make a new version for a correction.
 
 The target matrix is Apple Silicon macOS, Linux x86-64 and ARM64 (static musl),
-and Windows x86-64 (MSVC). Codex is a separately installed runtime prerequisite,
+and Windows x86-64 (MSVC with a statically linked CRT). Codex is a separately installed runtime prerequisite,
 not an embedded component of these archives. OS code signing and notarization
 require separate publisher identities and credentials; the current workflow
 does not claim to perform either.
