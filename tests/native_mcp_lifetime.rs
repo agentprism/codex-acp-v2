@@ -10,7 +10,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::test]
 async fn acp_eof_releases_native_listener_while_the_runtime_keeps_running() {
-    tokio::time::timeout(Duration::from_secs(10), async {
+    tokio::time::timeout(Duration::from_secs(15), async {
         let leases = Arc::new(tokio::sync::Mutex::new(McpLeases::default()));
         let retained = Arc::downgrade(&leases);
         let manager = McpManager::new(Duration::from_secs(2));
@@ -77,7 +77,8 @@ async fn acp_eof_releases_native_listener_while_the_runtime_keeps_running() {
         input.close().await.unwrap();
         task.await.unwrap().unwrap();
         assert!(retained.upgrade().is_none(), "ACP handler state retained a lease after EOF");
-        tokio::time::timeout(Duration::from_secs(3), async {
+        // Refusing a closed loopback port can take several SYN retries on Windows.
+        tokio::time::timeout(Duration::from_secs(8), async {
             loop {
                 if tokio::net::TcpStream::connect(&address).await.is_err() {
                     break;
