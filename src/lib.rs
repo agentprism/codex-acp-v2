@@ -6,5 +6,6 @@ mod config;
 pub mod extensions;
 pub mod input;
 pub mod interactions;
+pub mod mcp;
 pub mod projection;
 pub mod server;
