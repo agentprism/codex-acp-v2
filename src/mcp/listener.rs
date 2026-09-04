@@ -68,11 +68,32 @@ impl Listener {
         .context("native MCP connect task failed")?
     }
 
-    pub(super) async fn register(&self, lease: ProviderLease) -> Result<Arc<Endpoint>> {
+    pub(super) async fn register(self: &Arc<Self>, lease: ProviderLease) -> Result<Arc<Endpoint>> {
         let endpoint = lease.endpoint()?;
         let mut sessions = self.sessions.lock().await;
         ensure!(!*self.shutdown.borrow(), "native MCP listener is closing");
+        ensure!(
+            !*endpoint.shutdown.borrow(),
+            "native MCP session is closing"
+        );
         sessions.insert(endpoint.http_session_id.clone(), lease);
+        drop(sessions);
+        let listener = Arc::downgrade(self);
+        let id = endpoint.http_session_id.clone();
+        let mut shutdown = endpoint.shutdown.subscribe();
+        tokio::spawn(async move {
+            let _ = shutdown.wait_for(|closed| *closed).await;
+            if let Some(listener) = listener.upgrade() {
+                let lease = listener.sessions.lock().await.remove(&id);
+                if let Some(lease) = lease
+                    && lease.close().await.is_err()
+                {
+                    tracing::warn!(
+                        "native MCP failed-session retirement could not confirm disconnect"
+                    );
+                }
+            }
+        });
         Ok(endpoint)
     }
 

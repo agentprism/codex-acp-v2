@@ -25,6 +25,7 @@ class HttpMcp:
         self.notified = threading.Event()
         self.errors = queue.Queue()
         self.thread_id = None
+        self.held_requests = set()
 
     def post(self, frame):
         connection = http.client.HTTPConnection(self.url.hostname, self.url.port, timeout=8)
@@ -51,12 +52,17 @@ class HttpMcp:
                 frame = json.loads(line[5:].strip())
                 if frame.get("method") == "sampling/createMessage":
                     if frame["params"].get("hold"):
-                        emit({"method": "fixture/reverseHeld", "params": {"threadId": self.thread_id}})
+                        self.held_requests.add(frame["id"])
+                        emit({"method": "fixture/reverseHeld", "params": {"threadId": self.thread_id, "requestId": frame["id"]}})
                         continue
                     assert frame["params"] == {"maxTokens": 1, "messages": []}
                     self.post({"jsonrpc": "2.0", "id": frame["id"], "error": {"code": -32055, "message": "sampling denied", "data": {"scope": "test"}}})
                 elif frame.get("method") == "notifications/tools/list_changed":
                     self.notified.set()
+                elif frame.get("method") == "notifications/cancelled":
+                    assert frame["params"]["requestId"] in self.held_requests
+                    self.held_requests.remove(frame["params"]["requestId"])
+                    emit({"method": "fixture/reverseCancelled", "params": {"threadId": self.thread_id, "requestId": frame["params"]["requestId"]}})
                 else:
                     raise AssertionError(frame)
             connection.close()
@@ -158,6 +164,9 @@ def probe(binary):
     initializing = False
     pending_initialize_id = None
     initialize_cancelled = False
+    explicit_cancelled = False
+    cancelled_http_request = None
+    held_http_request = None
     def send(frame):
         process.stdin.write(json.dumps({"jsonrpc": "2.0", **frame}) + "\n")
         process.stdin.flush()
@@ -166,7 +175,7 @@ def probe(binary):
         assert message is not None, "adapter exited early"
         return message
     def handle(message):
-        nonlocal held, pending_cancelled, initializing, pending_initialize_id, initialize_cancelled
+        nonlocal held, pending_cancelled, initializing, pending_initialize_id, initialize_cancelled, explicit_cancelled, cancelled_http_request, held_http_request
         method, params = message.get("method"), message.get("params", {})
         if method == "mcp/connect":
             assert params["serverId"] == "client-native"
@@ -206,11 +215,17 @@ def probe(binary):
         elif message.get("id") == "pending-on-close":
             assert message["error"]["code"] == -32800, message
             pending_cancelled = True
+        elif message.get("id") == "explicit-cancel":
+            assert message["error"]["code"] == -32800, message
+            explicit_cancelled = True
         elif method == "$/cancel_request":
             assert params["requestId"] == pending_initialize_id, message
             initialize_cancelled = True
         elif method == "_codex/event" and params["method"] == "fixture/reverseHeld":
             held = True
+            held_http_request = params["params"]["requestId"]
+        elif method == "_codex/event" and params["method"] == "fixture/reverseCancelled":
+            cancelled_http_request = params["params"]["requestId"]
         elif method not in ("session/update", "_codex/event"):
             raise AssertionError(message)
     def rpc(method, params):
@@ -237,7 +252,7 @@ def probe(binary):
         finally:
             connection.close()
     try:
-        initialized = rpc("initialize", {"protocolVersion": 2, "info": {"name": "native-probe", "version": "1"}, "capabilities": {"_meta": {"codex": {"version": 1, "events": ["fixture/reverseHeld"]}}}})
+        initialized = rpc("initialize", {"protocolVersion": 2, "info": {"name": "native-probe", "version": "1"}, "capabilities": {"_meta": {"codex": {"version": 1, "events": ["fixture/reverseHeld", "fixture/reverseCancelled"]}}}})
         assert "acp" in initialized["result"]["capabilities"]["session"]["mcp"]
         declaration = {"type": "acp", "name": "native", "serverId": "client-native"}
         failed = rpc("session/new", {"cwd": os.getcwd(), "mcpServers": [declaration], "_meta": {"codex": {"thread": {"model": "fail"}}}})
@@ -253,7 +268,39 @@ def probe(binary):
         unauthorized.request("GET", "/not-the-secret")
         assert unauthorized.getresponse().status == 404
         unauthorized.close()
-        send({"id": "pending-on-close", "method": "mcp/message", "params": {"connectionId": connections[-1], "method": "sampling/createMessage", "params": {"hold": True}}})
+        active_connection = connections[-1]
+        # Closed sessions must return capacity, not exhaust the listener after
+        # enough provider failures. These connections intentionally have no SSE
+        # consumer; one oversized notification forces explicit retirement.
+        for _ in range(33):
+            def initialize_for_overload():
+                try:
+                    http = HttpMcp(url)
+                    result = http.post({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "overload", "version": "1"}}})
+                    received.put({"fixture_initialize": result})
+                except Exception as error:
+                    received.put({"fixture_initialize": str(error)})
+            worker = threading.Thread(target=initialize_for_overload, daemon=True)
+            worker.start()
+            while True:
+                message = frame()
+                if "fixture_initialize" in message:
+                    assert "result" in message["fixture_initialize"], message
+                    break
+                handle(message)
+            worker.join(timeout=1)
+            previous = len(disconnected)
+            send({"method": "mcp/message", "params": {"connectionId": connections[-1], "method": "notifications/message", "params": {"data": "x" * (1024 * 1024)}}})
+            await_disconnected(previous + 1)
+        send({"id": "explicit-cancel", "method": "mcp/message", "params": {"connectionId": active_connection, "method": "sampling/createMessage", "params": {"hold": True}}})
+        while not held:
+            handle(frame())
+        send({"method": "$/cancel_request", "params": {"requestId": "explicit-cancel"}})
+        while not explicit_cancelled or cancelled_http_request is None:
+            handle(frame())
+        assert cancelled_http_request == held_http_request, "cancellation changed the reverse MCP request identity"
+        held = False
+        send({"id": "pending-on-close", "method": "mcp/message", "params": {"connectionId": active_connection, "method": "sampling/createMessage", "params": {"hold": True}}})
         while not held:
             handle(frame())
         setup_closed = queue.Queue()
@@ -274,7 +321,7 @@ def probe(binary):
             handle(frame())
         closed = rpc("session/close", {"sessionId": session})
         assert "result" in closed, closed
-        await_disconnected(6)
+        await_disconnected(39)
         assert setup_closed.get(timeout=8) == 410, "session close must cancel unfinished MCP initialization"
         setup_thread.join(timeout=1)
         while not pending_cancelled:
@@ -284,7 +331,7 @@ def probe(binary):
         assert_closed(url)
         missing = rpc("mcp/message", {"connectionId": connections[-1], "method": "tools/list", "params": {}})
         assert missing["error"]["code"] == -32602, missing
-        assert len(set(connections)) == 6 and sorted(connections) == sorted(disconnected)
+        assert len(set(connections)) == 39 and sorted(connections) == sorted(disconnected)
         reopened = rpc("session/new", {"cwd": os.getcwd(), "mcpServers": [declaration]})
         reopened_id = reopened["result"]["sessionId"]
         live = rpc("_codex/request", {"version": 1, "sessionId": reopened_id, "method": "thread/read", "params": {"threadId": reopened_id}})

@@ -331,10 +331,16 @@ struct Pending {
 }
 impl Drop for Pending {
     fn drop(&mut self) {
-        self.endpoint
+        let pending = self
+            .endpoint
             .pending
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&self.id);
+        if pending.is_some() {
+            // Successful HTTP replies already remove the entry. Cancellation
+            // and timeout must stop the matching reverse MCP request too.
+            let _ = self.endpoint.publish(json!({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":self.id,"reason":"ACP request cancelled"}}));
+        }
     }
 }
