@@ -34,7 +34,7 @@ fn scope_checks_block_cross_session_and_host_escalation_without_rewriting_payloa
         ExtensionPolicy::new(true)
             .authorize(&request, &owned)
             .unwrap(),
-        RequestScope::Host
+        RequestScope::Thread("owned".into())
     );
     request.method = "initialize".into();
     assert!(matches!(

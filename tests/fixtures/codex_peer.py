@@ -130,7 +130,7 @@ for line in sys.stdin:
             complete_turn(status="interrupted")
         elif method is None and request.get("id") == pending_callback:
             if "error" in request:
-                result = "callback error"
+                result = {"error": request["error"]}
             else:
                 result = request["result"]
             notify("fixture/callback", {"threadId": thread["id"], "response": result})

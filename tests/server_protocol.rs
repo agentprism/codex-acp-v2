@@ -29,19 +29,24 @@ impl Client {
             "protocol tests require Python 3 ({python}) for the deterministic app-server fixture"
         );
         let directory = tempfile::tempdir().unwrap();
-        let mut child = Command::new(env!("CARGO_BIN_EXE_codex-acp-v2"))
-            .args([
-                "--codex-path",
-                python,
-                "--codex-arg",
-                concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/codex_peer.py"),
-                "--codex-arg",
-                "server",
-                "--request-timeout-seconds",
-                "5",
-                "--interaction-timeout-seconds",
-                "5",
-            ])
+        let mut command = Command::new(env!("CARGO_BIN_EXE_codex-acp-v2"));
+        command.args([
+            "--codex-path",
+            python,
+            "--codex-arg",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/codex_peer.py"),
+            "--codex-arg",
+            "server",
+            "--request-timeout-seconds",
+            "5",
+            "--interaction-timeout-seconds",
+            "5",
+        ]);
+        Self::connect(command, directory, negotiated).await
+    }
+
+    async fn connect(mut command: Command, directory: tempfile::TempDir, negotiated: bool) -> Self {
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -84,7 +89,12 @@ impl Client {
         let mut line = String::new();
         let size = tokio::time::timeout(Duration::from_secs(8), self.output.read_line(&mut line))
             .await
-            .expect("timed out reading ACP frame")
+            .unwrap_or_else(|_| {
+                panic!(
+                    "timed out reading ACP frame; pending activity: {:?}",
+                    self.backlog
+                )
+            })
             .unwrap();
         assert_ne!(
             size, 0,
@@ -162,6 +172,114 @@ fn current(options: &Value, id: &str) -> Value {
         .find(|option| option["configId"] == id)
         .unwrap()["currentValue"]
         .clone()
+}
+
+#[tokio::test]
+async fn oversized_acp_input_fails_without_waiting_for_peer_eof() {
+    let python = if cfg!(windows) { "python" } else { "python3" };
+    let mut child = Command::new(env!("CARGO_BIN_EXE_codex-acp-v2"))
+        .args([
+            "--codex-path",
+            python,
+            "--codex-arg",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/codex_peer.py"),
+            "--codex-arg",
+            "server",
+            "--max-frame-bytes",
+            "4096",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    input.write_all(&vec![b'x'; 4097]).await.unwrap();
+    input.flush().await.unwrap();
+    // Keep stdin open: the byte limit must reject the frame before a newline/EOF.
+    let output = tokio::time::timeout(Duration::from_secs(8), child.wait_with_output())
+        .await
+        .expect("oversized ACP frame did not terminate the adapter")
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("ACP inbound frame exceeds max_frame_bytes")
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires installed Codex and Python 3; isolated profile and local mock provider"]
+async fn installed_codex_supports_real_protocol_catalog_and_session_lifecycle() {
+    let python = if cfg!(windows) { "python" } else { "python3" };
+    let mut provider = Command::new(python)
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/responses_peer.py"
+        ))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut provider_output = BufReader::new(provider.stdout.take().unwrap());
+    let mut line = String::new();
+    tokio::time::timeout(Duration::from_secs(5), provider_output.read_line(&mut line))
+        .await
+        .unwrap()
+        .unwrap();
+    let provider_url = serde_json::from_str::<Value>(&line).unwrap()["url"].clone();
+    let directory = tempfile::tempdir().unwrap();
+    let profile = directory.path().join("codex-profile");
+    std::fs::create_dir(&profile).unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_codex-acp-v2"));
+    command
+        .args(["--request-timeout-seconds", "20"])
+        .env("CODEX_HOME", profile)
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("CODEX_API_KEY");
+    let mut client = Client::connect(command, directory, true).await;
+    let id = client
+        .new_session(json!({"sandbox":"read-only","approvalPolicy":"never","model":"smoke-model","modelProvider":"smoke",
+            "config":{"model_providers.smoke":{"name":"Local smoke","base_url":provider_url,"wire_api":"responses","requires_openai_auth":false,"supports_websockets":false}}}))
+        .await;
+    let read = client.rpc("_codex/request", json!({"version":1,"sessionId":id,"method":"thread/read","params":{"threadId":id,"includeTurns":false}})).await;
+    assert_eq!(read["thread"]["id"], id);
+    client
+        .rpc(
+            "session/prompt",
+            json!({"sessionId":id,"prompt":[{"type":"text","text":"deterministic-smoke-marker"}]}),
+        )
+        .await;
+    let message = client
+        .matching(|frame| frame["params"]["update"]["sessionUpdate"] == "agent_message")
+        .await;
+    assert_eq!(
+        message["params"]["update"]["content"],
+        json!([{"type":"text","text":"Local Responses smoke succeeded."}])
+    );
+    client.matching(|frame| is_state(frame, "idle")).await;
+    line.clear();
+    tokio::time::timeout(Duration::from_secs(5), provider_output.read_line(&mut line))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&line).unwrap(),
+        json!({"path":"/v1/responses","model":"smoke-model","markerCount":1})
+    );
+    client.rpc("session/close", json!({"sessionId":id})).await;
+    client
+        .rpc(
+            "session/resume",
+            json!({"sessionId":id,"cwd":client.directory.path(),"mcpServers":[]}),
+        )
+        .await;
+    client.rpc("session/close", json!({"sessionId":id})).await;
+    client.shutdown().await;
+    provider.kill().await.unwrap();
 }
 
 #[tokio::test]
@@ -292,6 +410,15 @@ async fn extensions_are_negotiated_bidirectional_and_share_authoritative_session
     let mut client = Client::start(true).await;
     let tools = json!([{"name":"client_lookup","description":"Client lookup","inputSchema":{"type":"object"}}]);
     let id = client.new_session(json!({"dynamicTools":tools})).await;
+    let started = client
+        .matching(|frame| {
+            frame["method"] == "_codex/event" && frame["params"]["method"] == "thread/started"
+        })
+        .await;
+    assert_eq!(
+        started["params"]["sessionId"], id,
+        "thread creation events preceding the backend response must survive session registration"
+    );
     let goal = json!({"threadId":id,"objective":"test goal","tokenBudget":1000});
     let result = client
         .rpc(
@@ -344,6 +471,30 @@ async fn extensions_are_negotiated_bidirectional_and_share_authoritative_session
         })
         .await;
     assert_eq!(observed["params"]["params"]["response"], callback_result);
+    client.matching(|frame| is_state(frame, "idle")).await;
+
+    client
+        .rpc(
+            "session/prompt",
+            json!({"sessionId":id,"prompt":[{"type":"text","text":"dynamic"}]}),
+        )
+        .await;
+    let callback = client
+        .matching(|frame| frame["method"] == "_codex/serverRequest")
+        .await;
+    let callback_error = json!({"code":-32042,"message":"client lookup failed","data":{"retryable":false,"detail":[1,2]}});
+    client
+        .send(json!({"jsonrpc":"2.0","id":callback["id"],"error":callback_error}))
+        .await;
+    let observed = client
+        .matching(|frame| {
+            frame["method"] == "_codex/event" && frame["params"]["method"] == "fixture/callback"
+        })
+        .await;
+    assert_eq!(
+        observed["params"]["params"]["response"],
+        json!({"error":callback_error})
+    );
     client.matching(|frame| is_state(frame, "idle")).await;
 
     // Complete-before-accept must not resurrect a finished turn and steer the next prompt.

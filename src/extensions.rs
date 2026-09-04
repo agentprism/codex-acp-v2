@@ -191,16 +191,16 @@ impl ExtensionPolicy {
                 return Err(ExtensionError::Ownership);
             }
         }
-        if host_method {
-            if !self.allow_host_methods {
-                return Err(ExtensionError::HostAccess);
-            }
-            return Ok(RequestScope::Host);
+        if host_method && !self.allow_host_methods {
+            return Err(ExtensionError::HostAccess);
         }
         if thread_method {
             return Ok(RequestScope::Thread(
                 session_id.ok_or(ExtensionError::Ownership)?.into(),
             ));
+        }
+        if host_method {
+            return Ok(RequestScope::Host);
         }
         Ok(RequestScope::Discovery)
     }
