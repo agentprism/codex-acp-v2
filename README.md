@@ -24,8 +24,10 @@ cargo build --release --locked
 
 Configure your ACP v2 client to launch that executable on stdin/stdout. Stdout is
 reserved for JSON-RPC traffic; diagnostics and child diagnostics use stderr.
-There is no TCP listener and no shared multi-tenant daemon. Each adapter process
-owns one app-server process and can host multiple threads.
+The ACP interface is stdio-only, not a shared multi-tenant daemon. Each adapter
+process owns one app-server process and can host multiple threads. Native
+MCP-over-ACP declarations additionally create private, token-protected loopback
+HTTP listeners for Codex's MCP transport; these do not expose the ACP server.
 
 `--codex-path` defaults to `codex` and can also be supplied through `CODEX_PATH`.
 Repeat `--codex-arg` for arguments that precede `app-server --stdio`:
@@ -43,9 +45,10 @@ Use `--help` for the authoritative CLI options.
 
 The reference backend is the Codex source at revision `89a4eec6da`. A real
 Codex `0.153.2` executable has also been exercised against a local mock Responses
-endpoint for initialization, model discovery, real backend turn execution,
-assistant/usage/completion events, and durable close/resume. That check uses no
-real account authentication or remote model inference. Features vary by backend version,
+endpoint for initialization, model discovery, command/file approvals and execution,
+dynamic callbacks, stdio/native MCP calls, child execution, durable root/child
+replay, provider errors, and cancellation. These checks use no real account
+authentication or remote model inference. Features vary by backend version,
 account, model, operating system, and feature flags: forwarding a supported
 method does not override Codex's own eligibility checks.
 
@@ -67,13 +70,28 @@ Prompt responses acknowledge acceptance, not completion. Clients must process
 `session/update` independently, including updates arriving before a prompt
 response. `state_update` reports `running`, `requires_action`, or `idle`.
 Background tool/subagent updates can still arrive after foreground work is idle.
+Session event queues preserve per-session order without making another session
+wait behind a slow replay. Cancellation admission is independent of queued
+configuration reconciliation.
 
-Messages, emitted reasoning, tools, command terminals, file diffs, structured
-plans, and current-context token usage are projected into ACP v2 updates. Stable
+Messages, emitted reasoning, tools, command terminals, file changes, structured
+plans, title/activity metadata, and current-context token usage are projected into ACP v2 updates. Stable
 item identities make completed messages/output replacement snapshots, not
 additional appended chunks. Terminals are display-only: this adapter does not
 ask the ACP client to execute Codex commands. A completed exec tool does not mark
 its terminal exited when the process remains running in the background.
+Terminal input interactions are reported as tool progress, not fabricated output
+bytes. Late command completion updates the same terminal when an exit code arrives.
+
+Backend failures and retries produce a standard, readable diagnostic message,
+even without Codex extension subscriptions. Notifications, final failures, and
+persisted failures replace the same diagnostic entity rather than duplicating it.
+Generated inline PNGs, dynamic image/audio output, MCP structured results, and
+web result links have native renderable content; no URL or backend-supplied file
+is read to manufacture that content. Local-only attachment paths stay references.
+File moves retain both paths. Update hunks become properly headed Git patches;
+add/delete snapshots use structured operations plus original text, since Codex
+does not supply the file modes needed for complete Git creation/deletion headers.
 
 Replay supports `replayFrom: {"type":"start"}`. Omitting `replayFrom` does not
 replay history. History is paginated from Codex and never submitted back to the
@@ -88,16 +106,37 @@ not fetched or read by the adapter. Arbitrary binary resources and remote image
 URLs are rejected rather than silently discarded. Prompt data remains ordinary
 user input; embedded resources cannot become system/developer instructions.
 
-MCP declarations support stdio and streamable HTTP. They become thread-local
-Codex MCP configuration. Native MCP-over-ACP and legacy SSE are not advertised.
-There are no ACP v1 filesystem or client terminal-execution RPCs.
+MCP declarations support stdio, streamable HTTP, and native MCP-over-ACP. All
+become thread-local Codex MCP configuration. A native declaration looks like:
+
+```json
+{"type":"acp","name":"client_tools","serverId":"my-client-tools"}
+```
+
+The client implements standard v2 `mcp/connect`, `mcp/message`, and
+`mcp/disconnect`; Codex extension negotiation is not required for this transport.
+The adapter translates native MCP envelopes to a token-protected loopback
+streamable-HTTP endpoint, with bidirectional requests, responses, errors, and
+notifications. Each backend HTTP MCP session, including inherited subagent
+connections, gets an independent client connection. Failed session setup and
+close release owned connections and listeners; resume establishes fresh leases.
+Limits include 16 native server declarations per ACP session, 32 HTTP sessions
+per listener, 128 native connections overall, 1 MiB MCP frames, bounded in-flight
+requests, and one reverse SSE stream per HTTP MCP session. SSE does not offer
+historical event replay IDs; a new MCP initialization gets independent protocol
+state. Legacy SSE server declarations are not part of
+the pinned v2 surface. There are no ACP v1 filesystem or client terminal-execution
+RPCs.
 
 ## Configuration scope
 
 Standard configuration selectors expose model, supported reasoning effort,
 service tier, approval policy, sandbox presets, and collaboration mode. They
 update the thread through `thread/settings/update`, not the global config file.
-Backend effective-settings notifications reconcile the client's configuration.
+Responses wait for matching effective-settings notifications, then return the
+whole authoritative option list, including model-dependent reasoning choices.
+An acknowledged-but-not-yet-effective backend setting is not treated as a
+successful local no-op; standard and extension mutations use the same barrier.
 
 After negotiating the Codex extension, creation/resume/fork requests may use
 `_meta.codex.thread` for explicitly accepted backend controls such as model
@@ -143,7 +182,9 @@ ACP settings. Live model changes require Codex's `step_model_switching` feature.
 
 ## Bidirectional Codex extensions
 
-Opt in during ACP initialization using the request's top-level `_meta`:
+Opt in during ACP initialization using `capabilities._meta.codex`. The legacy
+top-level `_meta.codex` location is accepted for compatibility; conflicting
+declarations are rejected:
 
 ```json
 {
@@ -153,12 +194,14 @@ Opt in during ACP initialization using the request's top-level `_meta`:
   "params": {
     "protocolVersion": 2,
     "info": {"name": "my-client", "version": "0.1.0"},
-    "capabilities": {"elicitation": {"form": {}, "url": {}}},
-    "_meta": {
-      "codex": {
-        "version": 1,
-        "events": ["thread/tokenUsage/updated", "turn/started"],
-        "serverRequests": true
+    "capabilities": {
+      "elicitation": {"form": {}, "url": {}},
+      "_meta": {
+        "codex": {
+          "version": 1,
+          "events": ["thread/tokenUsage/updated", "turn/started"],
+          "serverRequests": true
+        }
       }
     }
   }
@@ -167,8 +210,18 @@ Opt in during ACP initialization using the request's top-level `_meta`:
 
 `events` accepts exact backend notification names or `"*"`. `serverRequests`
 means the client implements response-requiring Codex callbacks. The initialize
-response's `_meta.codex` publishes the supported method lists and host gate.
+response's `capabilities._meta.codex` publishes the supported method lists and host gate.
 Inspect those lists rather than assuming every future backend method is allowed.
+
+Optional `rawServerRequests` selects exact backend callback names or `"*"` for
+lossless extension handling even when a native ACP interaction exists. It
+requires `serverRequests: true`. For example, select
+`item/permissions/requestApproval` to choose a subset of requested permissions
+and preserve `strictAutoReview`, or `mcpServer/elicitation/request` for a custom
+consent UI. Without that explicit preference, representable interactions use
+standard ACP permissions/elicitation; richer interactions use the callback
+extension when negotiated. Raw callback clients are responsible for displaying
+and validating the backend's actual consent semantics.
 
 Client to adapter:
 
@@ -195,6 +248,15 @@ may identify a descendant whose ancestry is verified against backend metadata.
 Creation, resume, fork, and
 unsubscribe use ACP lifecycle methods so ownership cannot be bypassed.
 
+History-replacing `thread/rollback` and `thread/revert` require the additional
+initialization opt-in `sessionReset: true`. The adapter emits
+`_codex/sessionReset` with `{version, sessionId, revision, phase, reason}`;
+`phase: "start"` tells the client to clear that session's projected transcript,
+standard replay updates rebuild it, and `phase: "complete"` closes the boundary.
+The mutation response follows successful replay. These operations require idle
+foreground work. Ordinary Codex context-window rollover does not clear the ACP
+transcript or emit this history-replacement signal.
+
 Adapter to client notifications use `_codex/event` with
 `{version, sessionId, method, params}`. Standard projected updates and subscribed
 raw notifications can describe the same event: clients should not render both
@@ -202,10 +264,13 @@ as separate chat items.
 
 Subagent callbacks are attached to their backend-verified open ACP root. The
 backend child thread ID remains unchanged in raw parameters. Child tool activity
-uses namespaced IDs; child messages and turn-state changes do not masquerade as
-the root's messages or foreground lifecycle. Parent collaboration/activity items
-provide the generic ACP subagent view; richer child history is available through
-the verified read-only extension routes.
+uses namespaced IDs across live updates and durable descendant tool/terminal
+replay; child messages and turn-state changes do not masquerade as the root's
+messages or foreground lifecycle. Parent collaboration/activity items provide
+the generic ACP subagent summary. Detailed child conversations remain available
+through the verified read-only extension routes. Replay preserves order within
+each thread, but the backend does not provide a shared cross-thread history
+cursor, so it cannot reconstruct exact live interleaving across root and children.
 
 Adapter to client requests use `_codex/serverRequest` with
 `{version, sessionId, requestId, method, params}`. Respond to the ACP request ID
@@ -279,8 +344,9 @@ modes can open a fresh context window instead.
 ## Development and verification
 
 Read [AGENTS.md](AGENTS.md) before editing. Default tests use deterministic fake
-app-server peers and require `python3`; they do not need credentials, paid
-inference, or external network access.
+app-server peers and require Python 3 and Git; they do not need credentials,
+paid inference, or external network access. Native MCP transport tests use
+loopback HTTP in addition to ACP stdio.
 
 ```sh
 cargo fmt --all --check
@@ -293,15 +359,43 @@ To repeat the installed-Codex check with an isolated temporary profile and local
 mock model endpoint (requires `codex` on PATH, plus Python 3):
 
 ```sh
-cargo test --test server_protocol installed_codex_supports_real_protocol_catalog_and_session_lifecycle -- --ignored
+cargo test --test server_protocol --locked installed_codex_supports_real_protocol_catalog_and_session_lifecycle -- --ignored
+cargo test --test installed_workflow --locked -- --ignored --nocapture
 ```
 
-Tests target meaningful risks: wire ordering, callback resolution, cancellation,
-replay identity, configuration scope, extension authorization, transport limits,
-and child shutdown. Mock tests prove adapter behavior, not model quality or all
-possible backend/account integrations. Live-model checks must be explicit opt-ins.
+The second command is a Unix-only fixture using harmless POSIX shell commands.
+It runs the full deterministic tool workflow through the
+installed Codex executable: harmless command execution, file creation, real
+approval requests, successful/failed dynamic tools, both stdio and native ACP
+MCP invocation, a real child with command/native MCP tools, durable root/child
+replay, a rejected provider request, and cancellation of pending inference.
+Only the model Responses endpoint and MCP providers are test doubles; the
+Codex runtime, tool execution, protocol transports, and stored rollouts are real.
+Everything runs in a temporary workspace and Codex profile without machine
+credentials. This is not a live-model or model-quality test.
+
+### Six-part acceptance contract
+
+| Original requirement | Implemented contract and capability boundary | Executable verification |
+| --- | --- | --- |
+| 1. Codex owns the runtime | Separate backend initialize/initialized handshake; one child process owns inference, tools, sandbox, MCP, subagents, and storage. Adapter history is only a client projection. | `cargo test --test backend_transport --locked` checks independent response/callback dispatch, cancellation cleanup, and explicit bounded-transport failures. Both opt-in installed-Codex commands above exercise the real runtime. |
+| 2. Actual ACP v2 Rust surface | Pinned SDK/schema, `unstable_protocol_v2`, `Agent.v2()`, typed `schema::v2` handlers/connections; asynchronous prompt acceptance and native MCP. Optional draft fork support is explicitly advertised. | `cargo check --all-targets --locked`; `cargo test --test server_protocol --locked` drives v2 envelopes through the built binary, not direct mocked handler calls. |
+| 3. Standard surfaces | Native new/list/resume/fork/prompt/steer/cancel/close/delete/config; precise permission and supported form/URL interactions; stable messages, reasoning, plans, tools, terminals, title, usage, and descendant tool replay. Delete archives; hard deletion requires host authority. | `cargo test --test server_protocol --test interactions --test projection --locked`: lifecycle/replay/cancel races, rendering identity, consent lifetimes, form constraints/metadata, file moves/Git patches, native errors and rich content. The installed workflow verifies actual tools and durable descendant replay. |
+| 4. Configuration scopes | Standard selectors update thread defaults and wait for effective settings. Prompt metadata carries only accepted per-prompt controls; live settings require an exact active turn ID. Sticky raw overrides stay deliberate. No implicit global config writes. | `queued_extension_settings_are_reconciled_before_native_configuration`, `standard_lifecycle_streams_approvals_cancels_and_replays_without_feeding_history_back`, and `extensions_are_negotiated_bidirectional_and_share_authoritative_session_state` in `server_protocol`. |
+| 5. Bidirectional extension interface | Negotiated allowlisted requests/events/callbacks preserve structured results/errors. Capability metadata is canonical; explicit raw-callback preference and session-reset opt-ins; owned thread/descendant/stream routing; host/account/process operations remain separately gated. Advanced backend families use this lossless interface, not invented generic ACP controls. | `cargo test --test advanced_callbacks --test backend_extensions --locked` covers raw subset grants, strict review, rich form metadata, dynamic errors, auth/attestation gates, capability conflicts, and host/cross-session policy. `server_protocol` checks shared state, stream ownership/cleanup, and history-reset replay boundaries. |
+| 6. Execution, streaming, context | Independent bounded event delivery, per-session ordering, replacement snapshots versus appended chunks, display-only terminal output, accurate cancellation/completion, MCP transport bridging, stable sessions across backend context resets. No adapter-authored summaries or model transcript reconstruction. | `cargo test --test native_mcp --test projection --test context_rollover --locked`; `slow_replay_does_not_block_another_sessions_events_or_prompt` in `server_protocol`; installed workflow verifies actual RMCP native transport and tool/callback execution. |
+
+The account/attestation fixtures verify routing, consent, and exact data/error
+preservation, not real account login or upstream attestation issuance. Backend
+feature eligibility, realtime service availability, model behavior, and large
+token-budget context algorithms remain Codex responsibilities; enabling an
+extension does not grant those capabilities. The context test verifies the
+adapter's stable-session/no-reinjection invariant using actual notification
+shapes, without consuming a large model token budget. Live-model checks must
+always be explicit opt-ins.
 
 The main modules are `backend` (child RPC transport), `server` (ACP lifecycle and
-event routing), `config`, `extensions`, `input`, `projection`, and `interactions`.
+event routing), `config`, `extensions`, `input`, `projection`, `interactions`,
+and `mcp` (session-owned native transport bridge).
 The Codex repository is a read-only implementation reference, not a build-time
 path dependency.
