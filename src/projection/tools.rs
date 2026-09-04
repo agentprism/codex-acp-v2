@@ -59,15 +59,20 @@ pub(super) fn project(item: &Value, completed: bool) -> Result<Vec<v2::SessionUp
     match item_type {
         "commandExecution" => {
             let mut terminal = v2::TerminalUpdate::new(terminal_id(id));
+            if let Some(command) = item["command"].as_str() {
+                terminal = terminal.command(command.to_owned());
+            }
+            if let Ok(cwd) = serde_json::from_value::<v2::AbsolutePath>(item["cwd"].clone()) {
+                terminal = terminal.cwd(cwd);
+            }
             if let Some(output) = item["aggregatedOutput"].as_str() {
                 terminal = terminal.output(v2::TerminalOutput::new(STANDARD.encode(output)));
             }
-            if completed {
+            // A completed exec tool can leave its process running in the background.
+            // Concrete exit evidence, not item completion, closes the display terminal.
+            if let Some(code) = item["exitCode"].as_i64() {
                 let mut exit = v2::TerminalExitStatus::new();
-                if let Some(code) = item["exitCode"]
-                    .as_u64()
-                    .and_then(|code| u32::try_from(code).ok())
-                {
+                if let Ok(code) = u32::try_from(code) {
                     exit = exit.exit_code(code);
                 }
                 terminal = terminal.exit_status(exit);
@@ -78,6 +83,9 @@ pub(super) fn project(item: &Value, completed: bool) -> Result<Vec<v2::SessionUp
             )));
             update =
                 update.raw_input(serde_json::json!({"command":item["command"], "cwd":item["cwd"]}));
+            if completed {
+                update = update.raw_output(serde_json::json!({"processId":item["processId"], "exitCode":item["exitCode"], "durationMs":item["durationMs"]}));
+            }
         }
         "fileChange" => {
             let (diffs, locations) = file_changes(&item["changes"])?;

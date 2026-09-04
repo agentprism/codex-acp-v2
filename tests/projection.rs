@@ -97,7 +97,13 @@ fn terminals_are_byte_chunks_then_snapshots_and_background_events_do_not_reopen_
     let completed = serde_json::to_value(completed)?;
     assert_eq!(
         completed[0],
-        json!({"sessionUpdate":"terminal_update","terminalId":"cmd:terminal","output":{"data":"zrsK"},"exitStatus":{"exitCode":0}})
+        json!({"sessionUpdate":"terminal_update","terminalId":"cmd:terminal","command":"echo λ","cwd":"/tmp","output":{"data":"zrsK"},"exitStatus":{"exitCode":0}})
+    );
+    let background = projector.project("item/completed", &json!({"item":{"type":"commandExecution","id":"background","command":"server","cwd":"/tmp","processId":"123","status":"completed","exitCode":null}}))?;
+    assert!(
+        serde_json::to_value(background)?[0]
+            .get("exitStatus")
+            .is_none()
     );
     let idle = projector.project("turn/completed", &json!({"turn":{"status":"interrupted"}}))?;
     assert_eq!(
