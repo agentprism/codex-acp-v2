@@ -469,3 +469,10 @@ path dependency.
 See [CONTRIBUTING.md](CONTRIBUTING.md) for CI, dependency updates, and the release
 process; [CHANGELOG.md](CHANGELOG.md) for changes; and [SECURITY.md](SECURITY.md)
 for private vulnerability reporting and trust boundaries.
+
+## License
+
+Licensed under the [Apache License, Version 2.0](LICENSE). Third-party
+dependencies retain their respective licenses. Release archives include their
+license and attribution notices; see [licenses/README.md](licenses/README.md)
+for how those records are generated and maintained.
