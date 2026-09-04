@@ -1,0 +1,16 @@
+Copyright notices from libcap 2.75, libcap/ sources and public headers.
+The accompanying LIBCAP-LICENSE is unchanged; redistribution uses its BSD-3-Clause option.
+
+libcap/_makenames.c: Copyright (c) 1997-8,2020 Andrew G. Morgan <morgan@kernel.org>
+libcap/cap_alloc.c: Copyright (c) 1997-8,2019,2021 Andrew G Morgan <morgan@kernel.org>
+libcap/cap_extint.c: Copyright (c) 1997-8,2021 Andrew G. Morgan <morgan@kernel.org>
+libcap/cap_file.c: Copyright (c) 1997,2007,2016 Andrew G Morgan <morgan@kernel.org>
+libcap/cap_flag.c: Copyright (c) 1997-8,2008,20-21 Andrew G. Morgan <morgan@kernel.org>
+libcap/cap_proc.c: Copyright (c) 1997-8,2007,11,19-21 Andrew G Morgan <morgan@kernel.org>
+libcap/cap_text.c: Copyright (c) 1997-8,2007-8,2019,2021 Andrew G Morgan <morgan@kernel.org>
+libcap/cap_text.c: Copyright (c) 1997 Andrew Main <zefram@dcs.warwick.ac.uk>
+libcap/execable.h: Copyright (c) 2021 Andrew G. Morgan <morgan@kernel.org>
+libcap/libcap.h: Copyright (c) 1997,2020 Andrew G Morgan <morgan@kernel.org>
+libcap/include/sys/capability.h: Copyright (C) 1997 Aleph One
+libcap/include/sys/capability.h: Copyright (C) 1997,8, 2008,19-22 Andrew G. Morgan <morgan@kernel.org>
+libcap/include/sys/securebits.h: Copyright (C) 2010 Serge Hallyn <serue@us.ibm.com>

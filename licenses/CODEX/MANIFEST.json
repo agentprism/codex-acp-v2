@@ -1,0 +1,472 @@
+{
+  "schemaVersion": 1,
+  "backendVersion": "0.153.3",
+  "backendCommit": "b1a547b1f73ce86205d9222ac19cff334b3b7a2e",
+  "files": [
+    {
+      "path": ".gitattributes",
+      "size": 115,
+      "sha256": "f3aadfc439481c4d0226c7f8f883756137904546a66a4007ec372a4dc70257ec"
+    },
+    {
+      "path": "APP-SERVER-NOTICES.html",
+      "size": 714518,
+      "sha256": "9563f9b78682eebeb5ee614947048885d5d5cb88df1862887182bb10c4a552cd"
+    },
+    {
+      "path": "BUBBLEWRAP-LICENSE",
+      "size": 25383,
+      "sha256": "b7993225104d90ddd8024fd838faf300bea5e83d91203eab98e29512acebd69c"
+    },
+    {
+      "path": "BWRAP-RUST-NOTICES.html",
+      "size": 15080,
+      "sha256": "4e0c94f4924e4d8d0062084938357b9fae8227b632ceb844124be604562c0735"
+    },
+    {
+      "path": "CODE-MODE-HOST-NOTICES.html",
+      "size": 466851,
+      "sha256": "6995061f517d9dfc2663674817543d787eb47e1e9b074886c2c02fd1e2ead0ed"
+    },
+    {
+      "path": "JEMALLOC-COPYING",
+      "size": 1709,
+      "sha256": "94aa2caa98c25d942f58b956c71dba6a99ff98fc3a31cbc669fe2a4cd0268b53"
+    },
+    {
+      "path": "LIBCAP-COPYRIGHT.txt",
+      "size": 1252,
+      "sha256": "97c9530bb64c089480713f46c362a3db3fc832afd17e9d702a75f10fc628475b"
+    },
+    {
+      "path": "LIBCAP-LICENSE",
+      "size": 20318,
+      "sha256": "68467e731f4744bd6e0bb69e8df9c3a994e09cd6b203d0c41327ac6d079c581d"
+    },
+    {
+      "path": "LICENSE",
+      "size": 10926,
+      "sha256": "d17f227e4df5da1600391338865ce0f3055211760a36688f816941d58232d8dc"
+    },
+    {
+      "path": "NOTICE",
+      "size": 242,
+      "sha256": "9d71575ecfd9a843fc1677b0efb08053c6ba9fd686a0de1a6f5382fd3c220915"
+    },
+    {
+      "path": "PCRE2-LICENCE.md",
+      "size": 3867,
+      "sha256": "9cf7ac6976099a1d856826d3ef1b093bd6b84489dc6100628ac79e740cf9885a"
+    },
+    {
+      "path": "README.md",
+      "size": 10655,
+      "sha256": "d52357dea7206b80ad20a07b6004e4f1ffa3bdf860634371933a92455fa01bd2"
+    },
+    {
+      "path": "RIPGREP-NOTICES.html",
+      "size": 26466,
+      "sha256": "11a27f735b1b28288aa8927a4d5338a0e4391f931e058f07dbcec696e4545298"
+    },
+    {
+      "path": "RIPGREP-RUST-NIGHTLY/COPYRIGHT-library.html",
+      "size": 1512520,
+      "sha256": "b3e8f954eb940dcae0cc3ad902370df137e6df9eb9bffee34048734bae1f1b95"
+    },
+    {
+      "path": "RIPGREP-RUST-NIGHTLY/licenses/Apache-2.0.txt",
+      "size": 10280,
+      "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+    },
+    {
+      "path": "RIPGREP-RUST-NIGHTLY/licenses/BSD-2-Clause.txt",
+      "size": 1267,
+      "sha256": "f32fb3b417a194167cfad068223fc975ba96c5960513a10f66a3c28720aec1df"
+    },
+    {
+      "path": "RIPGREP-RUST-NIGHTLY/licenses/CC-BY-SA-4.0.txt",
+      "size": 20137,
+      "sha256": "23ee78c8bae49cf08ea2f0c84945c66b987ebe4520881fb51b3dad4fb43d07c2"
+    },
+    {
+      "path": "RIPGREP-RUST-NIGHTLY/licenses/GCC-exception-3.1.txt",
+      "size": 3320,
+      "sha256": "a3966c9410ef94a1efbfa9ec04e9c1994026a70623fbf0885ce36737bfba3b54"
+    },
+    {
+      "path": "RIPGREP-RUST-NIGHTLY/licenses/GPL-2.0-only.txt",
+      "size": 17642,
+      "sha256": "54b212ba1f97f6948fa5486239ab505dd820b02e50cbfd296b4062c8609a70af"
+    },
+    {
+      "path": "RIPGREP-RUST-NIGHTLY/licenses/GPL-3.0-or-later.txt",
+      "size": 34795,
+      "sha256": "05315fce6c35f79b8a35454828995fa26336f235895ac64557abc028f4ffcea2"
+    },
+    {
+      "path": "RIPGREP-RUST-NIGHTLY/licenses/ISC.txt",
+      "size": 730,
+      "sha256": "0ff61769b238634e042ab759dddfd104a8e69d091e3600ae3410e401a6164381"
+    },
+    {
+      "path": "RIPGREP-RUST-NIGHTLY/licenses/LLVM-exception.txt",
+      "size": 919,
+      "sha256": "e34c58338bd89d43e709e226610d8f32b3e3c47f4ad9a99a8dc1d4ac7842488e"
+    },
+    {
+      "path": "RIPGREP-RUST-NIGHTLY/licenses/MIT.txt",
+      "size": 1078,
+      "sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0"
+    },
+    {
+      "path": "RIPGREP-RUST-NIGHTLY/licenses/NCSA.txt",
+      "size": 1676,
+      "sha256": "39cb0234065c92b9e6cee3830cbb52b1aa289aa8fe9ba2e66730fec5cf05c630"
+    },
+    {
+      "path": "RIPGREP-RUST-NIGHTLY/licenses/OFL-1.1.txt",
+      "size": 4016,
+      "sha256": "8eea8287e5876b539670cadb82e99f9a7afddec6f6730811be1daf25d2e9bcfd"
+    },
+    {
+      "path": "RIPGREP-RUST-NIGHTLY/licenses/Unicode-3.0.txt",
+      "size": 1995,
+      "sha256": "f5062c9a188d81dfe66b56db4182dcf9e4b17c0d9b0d311a8e20b3a1b075c443"
+    },
+    {
+      "path": "RIPGREP-RUST-STABLE/COPYRIGHT-library.html",
+      "size": 279302,
+      "sha256": "0a65bb747c49c7bb816cbc7188319bd6e4e8d08091c1190b8a3c0971c47968ed"
+    },
+    {
+      "path": "RIPGREP-RUST-STABLE/licenses/Apache-2.0.txt",
+      "size": 10280,
+      "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+    },
+    {
+      "path": "RIPGREP-RUST-STABLE/licenses/BSD-2-Clause.txt",
+      "size": 1267,
+      "sha256": "f32fb3b417a194167cfad068223fc975ba96c5960513a10f66a3c28720aec1df"
+    },
+    {
+      "path": "RIPGREP-RUST-STABLE/licenses/CC-BY-SA-4.0.txt",
+      "size": 20137,
+      "sha256": "23ee78c8bae49cf08ea2f0c84945c66b987ebe4520881fb51b3dad4fb43d07c2"
+    },
+    {
+      "path": "RIPGREP-RUST-STABLE/licenses/GCC-exception-3.1.txt",
+      "size": 3320,
+      "sha256": "a3966c9410ef94a1efbfa9ec04e9c1994026a70623fbf0885ce36737bfba3b54"
+    },
+    {
+      "path": "RIPGREP-RUST-STABLE/licenses/GPL-2.0-only.txt",
+      "size": 17642,
+      "sha256": "54b212ba1f97f6948fa5486239ab505dd820b02e50cbfd296b4062c8609a70af"
+    },
+    {
+      "path": "RIPGREP-RUST-STABLE/licenses/GPL-3.0-or-later.txt",
+      "size": 34795,
+      "sha256": "05315fce6c35f79b8a35454828995fa26336f235895ac64557abc028f4ffcea2"
+    },
+    {
+      "path": "RIPGREP-RUST-STABLE/licenses/ISC.txt",
+      "size": 730,
+      "sha256": "0ff61769b238634e042ab759dddfd104a8e69d091e3600ae3410e401a6164381"
+    },
+    {
+      "path": "RIPGREP-RUST-STABLE/licenses/LLVM-exception.txt",
+      "size": 919,
+      "sha256": "e34c58338bd89d43e709e226610d8f32b3e3c47f4ad9a99a8dc1d4ac7842488e"
+    },
+    {
+      "path": "RIPGREP-RUST-STABLE/licenses/MIT.txt",
+      "size": 1078,
+      "sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0"
+    },
+    {
+      "path": "RIPGREP-RUST-STABLE/licenses/NCSA.txt",
+      "size": 1676,
+      "sha256": "39cb0234065c92b9e6cee3830cbb52b1aa289aa8fe9ba2e66730fec5cf05c630"
+    },
+    {
+      "path": "RIPGREP-RUST-STABLE/licenses/OFL-1.1.txt",
+      "size": 4016,
+      "sha256": "8eea8287e5876b539670cadb82e99f9a7afddec6f6730811be1daf25d2e9bcfd"
+    },
+    {
+      "path": "RIPGREP-RUST-STABLE/licenses/Unicode-3.0.txt",
+      "size": 1995,
+      "sha256": "f5062c9a188d81dfe66b56db4182dcf9e4b17c0d9b0d311a8e20b3a1b075c443"
+    },
+    {
+      "path": "RUST-STD-LICENSES/Apache-2.0.txt",
+      "size": 10280,
+      "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+    },
+    {
+      "path": "RUST-STD-LICENSES/BSD-2-Clause.txt",
+      "size": 1267,
+      "sha256": "f32fb3b417a194167cfad068223fc975ba96c5960513a10f66a3c28720aec1df"
+    },
+    {
+      "path": "RUST-STD-LICENSES/CC-BY-SA-4.0.txt",
+      "size": 20137,
+      "sha256": "23ee78c8bae49cf08ea2f0c84945c66b987ebe4520881fb51b3dad4fb43d07c2"
+    },
+    {
+      "path": "RUST-STD-LICENSES/GCC-exception-3.1.txt",
+      "size": 3320,
+      "sha256": "a3966c9410ef94a1efbfa9ec04e9c1994026a70623fbf0885ce36737bfba3b54"
+    },
+    {
+      "path": "RUST-STD-LICENSES/GPL-2.0-only.txt",
+      "size": 17642,
+      "sha256": "54b212ba1f97f6948fa5486239ab505dd820b02e50cbfd296b4062c8609a70af"
+    },
+    {
+      "path": "RUST-STD-LICENSES/GPL-3.0-or-later.txt",
+      "size": 34795,
+      "sha256": "05315fce6c35f79b8a35454828995fa26336f235895ac64557abc028f4ffcea2"
+    },
+    {
+      "path": "RUST-STD-LICENSES/ISC.txt",
+      "size": 730,
+      "sha256": "0ff61769b238634e042ab759dddfd104a8e69d091e3600ae3410e401a6164381"
+    },
+    {
+      "path": "RUST-STD-LICENSES/LLVM-exception.txt",
+      "size": 919,
+      "sha256": "e34c58338bd89d43e709e226610d8f32b3e3c47f4ad9a99a8dc1d4ac7842488e"
+    },
+    {
+      "path": "RUST-STD-LICENSES/MIT.txt",
+      "size": 1078,
+      "sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0"
+    },
+    {
+      "path": "RUST-STD-LICENSES/NCSA.txt",
+      "size": 1676,
+      "sha256": "39cb0234065c92b9e6cee3830cbb52b1aa289aa8fe9ba2e66730fec5cf05c630"
+    },
+    {
+      "path": "RUST-STD-LICENSES/OFL-1.1.txt",
+      "size": 4016,
+      "sha256": "8eea8287e5876b539670cadb82e99f9a7afddec6f6730811be1daf25d2e9bcfd"
+    },
+    {
+      "path": "RUST-STD-LICENSES/Unicode-3.0.txt",
+      "size": 1995,
+      "sha256": "f5062c9a188d81dfe66b56db4182dcf9e4b17c0d9b0d311a8e20b3a1b075c443"
+    },
+    {
+      "path": "RUST-STD-NOTICES.html",
+      "size": 425661,
+      "sha256": "90567e2718bf7fd65a71a3a43c5596488e80e5f51ed02bfea6fec54458b5f3d1"
+    },
+    {
+      "path": "V8/LICENSE",
+      "size": 1078,
+      "sha256": "1c6356fb751d45f0c53093ebf8a7f5e580e802f51999178e19d60f3ec39e147d"
+    },
+    {
+      "path": "V8/SOURCES.json",
+      "size": 9969,
+      "sha256": "deeceec7d8bd1dea40dd49aef0b7c04a19b785d9b67eb19a63bd7f07aa0f29a0"
+    },
+    {
+      "path": "V8/third_party/abseil-cpp/LICENSE",
+      "size": 11361,
+      "sha256": "c79a7fea0e3cac04cd43f20e7b648e5a0ff8fa5344e644b0ee09ca1162b62747"
+    },
+    {
+      "path": "V8/third_party/dragonbox/src/LICENSE-Apache2-LLVM",
+      "size": 12262,
+      "sha256": "9e45e856bedccee9f67254082ca11851d954de2fed7448c4bed19ad9aab99a91"
+    },
+    {
+      "path": "V8/third_party/dragonbox/src/LICENSE-Boost",
+      "size": 1338,
+      "sha256": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566"
+    },
+    {
+      "path": "V8/third_party/fast_float/src/LICENSE-APACHE",
+      "size": 10767,
+      "sha256": "097a889aa954d04e088b790b10a4014d6189561d0a6013935a73ce3d4ddaaf06"
+    },
+    {
+      "path": "V8/third_party/fast_float/src/LICENSE-BOOST",
+      "size": 1337,
+      "sha256": "8d8291caf1cee26d23acf3eb67c9f9a2d58f1c681b16a4fbe8cbfb9e3c0b5a9b"
+    },
+    {
+      "path": "V8/third_party/fast_float/src/LICENSE-MIT",
+      "size": 1079,
+      "sha256": "e562f3f974ced7e69dd1db77b820b36bcf8f30377f1aa105723fba449c53c4e6"
+    },
+    {
+      "path": "V8/third_party/fp16/src/LICENSE",
+      "size": 1157,
+      "sha256": "17e4f539024be2749ee729d1e2f01d24cef12ece8c9bf18e91a4349be29c80bf"
+    },
+    {
+      "path": "V8/third_party/highway/src/LICENSE",
+      "size": 20785,
+      "sha256": "e340270d4f64384569a91d546acb5b094d69ce47f0c015db77abb74dc6f815af"
+    },
+    {
+      "path": "V8/third_party/icu/LICENSE",
+      "size": 26487,
+      "sha256": "451167c55c0fa447cc2d5632714f5e3c567fe4f1e1badefab2c1333852198aca"
+    },
+    {
+      "path": "V8/third_party/libc++/src/LICENSE.TXT",
+      "size": 16703,
+      "sha256": "539dd7aed86e8a4f12cbdd0e6c50c189c7d74847e4fecc64ce2c6ee3a01da38b"
+    },
+    {
+      "path": "V8/third_party/libc++abi/src/LICENSE.TXT",
+      "size": 16706,
+      "sha256": "e2b35be49f7284a45b7baca8fc7b3ab7440e7902392b2528a457816b5bb2a15c"
+    },
+    {
+      "path": "V8/third_party/libunwind/src/LICENSE.TXT",
+      "size": 16706,
+      "sha256": "b5efebcaca80879234098e52d1725e6d9eb8fb96a19fce625d39184b705f7b6d"
+    },
+    {
+      "path": "V8/third_party/llvm-libc/src/LICENSE.TXT",
+      "size": 15140,
+      "sha256": "ebcd9bbf783a73d05c53ba4d586b8d5813dcdf3bbec50265860ccc885e606f47"
+    },
+    {
+      "path": "V8/third_party/partition_alloc/LICENSE",
+      "size": 1536,
+      "sha256": "368cca1106be99d39ecd32a38d8305585d802a475effb66380b91ffc9bcf709b"
+    },
+    {
+      "path": "V8/third_party/simdutf/LICENSE",
+      "size": 1059,
+      "sha256": "fc8dbc04e03ad4efc08a647ffe7f995b811a95bc04c0e85a56d5277c6593fa5f"
+    },
+    {
+      "path": "V8/v8/LICENSE",
+      "size": 3093,
+      "sha256": "6ab33af8774a0f396ee3aeeb761e3229057682d6f9fa7f572e390c2cb3a6e509"
+    },
+    {
+      "path": "V8/v8/LICENSE.fdlibm",
+      "size": 250,
+      "sha256": "e7115e18444dae09d17f361ddc365fb1d342640fe500796209c63f7c80dfae10"
+    },
+    {
+      "path": "V8/v8/LICENSE.strongtalk",
+      "size": 1482,
+      "sha256": "6a585a9f466654abc8fc0829d56b1bc987e3a073d31faa03bba37d33640a23cd"
+    },
+    {
+      "path": "V8/v8/LICENSE.v8",
+      "size": 1527,
+      "sha256": "4af93c12062c58058378de2397dc1c92bbff9ddfb1d583a01c84127557ce97ca"
+    },
+    {
+      "path": "V8/v8/third_party/colorama/LICENSE",
+      "size": 1492,
+      "sha256": "15137d6c822e3ab097093a33c3a39a9df699f373f6438867ad534ff60762a947"
+    },
+    {
+      "path": "V8/v8/third_party/fp16/LICENSE",
+      "size": 1158,
+      "sha256": "c91377adafa2f498211a4fe017788e20c38892124673860f068f2919c289193d"
+    },
+    {
+      "path": "V8/v8/third_party/glibc/LICENSE",
+      "size": 26526,
+      "sha256": "b634ab5640e258563c536e658cad87080553df6f34f62269a21d554844e58bfe"
+    },
+    {
+      "path": "V8/v8/third_party/highway/LICENSE",
+      "size": 11356,
+      "sha256": "43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1"
+    },
+    {
+      "path": "V8/v8/third_party/inspector_protocol/LICENSE",
+      "size": 1537,
+      "sha256": "450ebb9e9e50c2809d9ca581931fc8946d8d5aa0c8c35aae9ac471342fe4a88e"
+    },
+    {
+      "path": "V8/v8/third_party/jsoncpp/LICENSE",
+      "size": 2665,
+      "sha256": "76c45ece83a26117f86f4e349e7df118708e061e87225328fb478ce1e8b3eb86"
+    },
+    {
+      "path": "V8/v8/third_party/rapidhash-v8/LICENSE",
+      "size": 1705,
+      "sha256": "db672df7faf793fbe28b8074fdd10822363e1525816b45c9627754885de842b0"
+    },
+    {
+      "path": "V8/v8/third_party/re2/LICENSE",
+      "size": 1558,
+      "sha256": "6040cda75d90b1738292a631d89934c411ef7ffd543c4d6a1b7edfc8edf29449"
+    },
+    {
+      "path": "V8/v8/third_party/siphash/LICENSE",
+      "size": 6555,
+      "sha256": "36ffd9dc085d529a7e60e1276d73ae5a030b020313e6c5408593a6ae2af39673"
+    },
+    {
+      "path": "V8/v8/third_party/utf8-decoder/LICENSE",
+      "size": 1087,
+      "sha256": "3f712e5fbdfdbd5ee7d9b8c8152580220df55de47f4eba2f26c95c4de19ad096"
+    },
+    {
+      "path": "V8/v8/third_party/v8/builtins/LICENSE",
+      "size": 12763,
+      "sha256": "b9a6d9320b8f2693e8d41e496ce56caadacaddcca9be2a64a61749278f425cf2"
+    },
+    {
+      "path": "V8/v8/third_party/v8/codegen/LICENSE",
+      "size": 1157,
+      "sha256": "17e4f539024be2749ee729d1e2f01d24cef12ece8c9bf18e91a4349be29c80bf"
+    },
+    {
+      "path": "V8/v8/third_party/valgrind/LICENSE",
+      "size": 2439,
+      "sha256": "ebf25b8ce59c9e8883acd1ca75b6fc121937ca034f666c4077d2be739d2e1622"
+    },
+    {
+      "path": "V8/v8/third_party/vtune/LICENSE",
+      "size": 1925,
+      "sha256": "02aea3ade0c02470335987f7d93ffaed877bcefc8414a416e2e548665bb0bfd0"
+    },
+    {
+      "path": "V8/v8/third_party/wasm-api/LICENSE",
+      "size": 11358,
+      "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08"
+    },
+    {
+      "path": "WEZTERM-LICENSE",
+      "size": 1076,
+      "sha256": "331312c214f14dc1455a0e45e3a66f4b70bbc73916cffd525570e8cdb9d63bf4"
+    },
+    {
+      "path": "WINDOWS-SANDBOX-NOTICES.html",
+      "size": 428031,
+      "sha256": "cabf304b1f54949240697251ee4309b00b2ee26c0bb69f9d041c97c9c5d53ffb"
+    },
+    {
+      "path": "ZSH-LICENCE",
+      "size": 1963,
+      "sha256": "d06fdf3ef9b1ec69d6b9e170b0a9516fbad3523261ff1668bde3bfea6e0ef5f5"
+    },
+    {
+      "path": "about.hbs",
+      "size": 917,
+      "sha256": "69f771bc862738ae711d2493fc289d1529f92c72eef963dc389268cd7ded5b1f"
+    },
+    {
+      "path": "about.toml",
+      "size": 486,
+      "sha256": "9d8367fef08e68766b59eb01bbeb6d67886509709dbbc6e11917cc12c6ac58b1"
+    }
+  ]
+}
