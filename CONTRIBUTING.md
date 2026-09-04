@@ -69,11 +69,11 @@ to a package registry.
 2. Merge only after required checks pass on the default branch. Review the
    resulting changes and ensure the working tree is clean.
 3. Create an annotated version tag at that reviewed commit and push only that
-   tag. For the initial version:
+   tag. For the first published version:
 
    ```sh
-   git tag -a v0.1.0 -m "Release v0.1.0"
-   git push origin v0.1.0
+   git tag -a v0.1.1 -m "Release v0.1.1"
+   git push origin v0.1.1
    ```
 
 4. Monitor the Release workflow. It validates the tag against the manifest and

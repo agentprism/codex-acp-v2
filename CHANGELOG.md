@@ -1,8 +1,10 @@
 # Changelog
 
-## 0.1.0
+## 0.1.1
 
-Initial release of the Rust ACP protocol v2 adapter for Codex app-server.
+First published binary release of the Rust ACP protocol v2 adapter for Codex
+app-server. Fixes draft-release lookup in the publisher while retaining the
+original `v0.1.0` source tag unchanged.
 
 - ACP v2 sessions, prompts, steering, cancellation, configuration, history replay,
   fork, close, and archival-based deletion.
@@ -21,3 +23,9 @@ Initial release of the Rust ACP protocol v2 adapter for Codex app-server.
 
 ACP v2 and its optional SDK features are draft and pinned. Backend features still
 depend on the installed Codex version, configuration, model, and account.
+
+## 0.1.0 — tagged, not published
+
+The initial source tag is retained for traceability. All four release binaries
+were built and attested, but a draft-release lookup failure prevented binary
+publication. Use the `v0.1.1` release instead.

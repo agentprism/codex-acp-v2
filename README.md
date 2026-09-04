@@ -42,12 +42,12 @@ For example, with the [GitHub CLI](https://cli.github.com/), download and verify
 the Apple Silicon archive before extracting it:
 
 ```sh
-gh release download v0.1.0 --repo agentprism/codex-acp-v2 \
-  --pattern codex-acp-v2-v0.1.0-aarch64-apple-darwin.tar.gz \
+gh release download v0.1.1 --repo agentprism/codex-acp-v2 \
+  --pattern codex-acp-v2-v0.1.1-aarch64-apple-darwin.tar.gz \
   --pattern SHA256SUMS
-gh attestation verify codex-acp-v2-v0.1.0-aarch64-apple-darwin.tar.gz \
+gh attestation verify codex-acp-v2-v0.1.1-aarch64-apple-darwin.tar.gz \
   --repo agentprism/codex-acp-v2
-shasum -a 256 codex-acp-v2-v0.1.0-aarch64-apple-darwin.tar.gz
+shasum -a 256 codex-acp-v2-v0.1.1-aarch64-apple-darwin.tar.gz
 ```
 
 Compare the printed digest with that archive's entry in `SHA256SUMS`. On Linux
@@ -60,7 +60,7 @@ OS signature or proof that the software is free of vulnerabilities.
 After both verification steps succeed, extract the archive:
 
 ```sh
-tar -xzf codex-acp-v2-v0.1.0-aarch64-apple-darwin.tar.gz
+tar -xzf codex-acp-v2-v0.1.1-aarch64-apple-darwin.tar.gz
 ```
 
 Put the extracted `codex-acp-v2` binary (`codex-acp-v2.exe` on Windows) on PATH,
