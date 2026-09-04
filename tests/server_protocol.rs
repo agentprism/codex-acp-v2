@@ -18,6 +18,10 @@ struct Client {
 
 impl Client {
     async fn start(negotiated: bool) -> Self {
+        Self::start_with_timeout(negotiated, "5").await
+    }
+
+    async fn start_with_timeout(negotiated: bool, timeout: &str) -> Self {
         let python = if cfg!(windows) { "python" } else { "python3" };
         assert!(
             Command::new(python)
@@ -38,7 +42,7 @@ impl Client {
             "--codex-arg",
             "server",
             "--request-timeout-seconds",
-            "5",
+            timeout,
             "--interaction-timeout-seconds",
             "5",
         ]);
@@ -65,8 +69,7 @@ impl Client {
         };
         let mut initialize = json!({"protocolVersion":2,"info":{"name":"test-client","version":"1"},"capabilities":{}});
         if negotiated {
-            initialize["_meta"] =
-                json!({"codex":{"version":1,"events":["*"],"serverRequests":true}});
+            initialize["_meta"] = json!({"codex":{"version":1,"events":["*"],"serverRequests":true,"sessionReset":true}});
         }
         let response = client.rpc("initialize", initialize).await;
         assert_eq!(response["protocolVersion"], 2);
@@ -172,6 +175,212 @@ fn current(options: &Value, id: &str) -> Value {
         .find(|option| option["configId"] == id)
         .unwrap()["currentValue"]
         .clone()
+}
+
+#[tokio::test]
+async fn cancellation_racing_completion_keeps_the_connection_usable() {
+    let mut client = Client::start(true).await;
+    let id = client.new_session(Value::Null).await;
+    client
+        .rpc(
+            "session/prompt",
+            json!({"sessionId":id,"prompt":[{"type":"text","text":"cancel race"}]}),
+        )
+        .await;
+    client
+        .send(json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":id}}))
+        .await;
+    let completed = client
+        .matching(|frame| {
+            is_state(frame, "idle") && frame["params"]["update"]["stopReason"] == "end_turn"
+        })
+        .await;
+    assert_eq!(completed["params"]["sessionId"], id);
+    client
+        .rpc(
+            "session/prompt",
+            json!({"sessionId":id,"prompt":[{"type":"text","text":"fast"}]}),
+        )
+        .await;
+    let answer = client
+        .matching(|frame| {
+            frame["params"]["update"]["messageId"] == "answer-turn-2"
+                && frame["params"]["update"]["sessionUpdate"] == "agent_message"
+        })
+        .await;
+    assert_eq!(
+        answer["params"]["update"]["content"],
+        json!([{"type":"text","text":"fast answer"}])
+    );
+    client
+        .send(json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":"missing"}}))
+        .await;
+    client.rpc("session/list", json!({})).await;
+    client.shutdown().await;
+}
+
+#[tokio::test]
+async fn queued_extension_settings_are_reconciled_before_native_configuration() {
+    let mut client = Client::start_with_timeout(true, "1").await;
+    let id = client
+        .new_session(json!({"config":{"audit_defer_settings":true}}))
+        .await;
+    client
+        .rpc(
+            "session/prompt",
+            json!({"sessionId":id,"prompt":[{"type":"text","text":"long"}]}),
+        )
+        .await;
+    client.send(json!({"jsonrpc":"2.0","id":100,"method":"_codex/request","params":{"version":1,"sessionId":id,"method":"thread/settings/update","params":{"threadId":id,"effort":"high"}}})).await;
+    client
+        .matching(|frame| {
+            frame["method"] == "_codex/event"
+                && frame["params"]["method"] == "fixture/settingsQueued"
+        })
+        .await;
+    client
+        .send(json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":id}}))
+        .await;
+    tokio::time::timeout(
+        Duration::from_millis(500),
+        client.matching(|frame| {
+            is_state(frame, "idle") && frame["params"]["update"]["stopReason"] == "cancelled"
+        }),
+    )
+    .await
+    .expect("cancellation must not wait for pending session settings to reconcile");
+    // An unrelated snapshot cannot certify this mutation. Timing out after the
+    // backend's queued acknowledgment must not discard its unresolved state.
+    let extension = client
+        .matching(|frame| frame["id"] == 100 && frame.get("method").is_none())
+        .await;
+    assert!(extension.get("error").is_some());
+    client.send(json!({"jsonrpc":"2.0","id":101,"method":"session/set_config_option","params":{"sessionId":id,"configId":"effort","type":"id","value":"medium"}})).await;
+    client
+        .rpc(
+            "_codex/request",
+            json!({"version":1,"method":"model/list","params":{}}),
+        )
+        .await;
+    let native = client
+        .matching(|frame| frame["id"] == 101 && frame.get("method").is_none())
+        .await;
+    assert_eq!(
+        current(&native["result"]["configOptions"], "effort"),
+        "medium"
+    );
+    client.rpc("session/close", json!({"sessionId":id})).await;
+    let resumed = client
+        .rpc(
+            "session/resume",
+            json!({"sessionId":id,"cwd":client.directory.path(),"mcpServers":[]}),
+        )
+        .await;
+    assert_eq!(current(&resumed["configOptions"], "effort"), "medium");
+    client.shutdown().await;
+}
+
+#[tokio::test]
+async fn session_owned_mcp_streams_route_early_events_stop_and_close_without_host_access() {
+    let mut client = Client::start(true).await;
+    let id = client.new_session(Value::Null).await;
+    let start = |subscription: &str| json!({"version":1,"sessionId":id,"method":"mcpServer/event/stream/start","params":{"threadId":id,"subscriptionId":subscription,"server":"tools","name":"watch","arguments":{}}});
+    client.rpc("_codex/request", start("watch-1")).await;
+    let event = client
+        .matching(|frame| {
+            frame["method"] == "_codex/event"
+                && frame["params"]["method"] == "mcpServer/event/stream"
+        })
+        .await;
+    assert_eq!(event["params"]["sessionId"], id);
+    assert_eq!(
+        event["params"]["params"]["notification"]["params"]["data"],
+        "early MCP event"
+    );
+    let duplicate = client.request("_codex/request", start("watch-1")).await;
+    assert!(duplicate.get("error").is_some());
+    client.rpc("_codex/request",json!({"version":1,"sessionId":id,"method":"mcpServer/event/stream/stop","params":{"subscriptionId":"watch-1"}})).await;
+    client.rpc("_codex/request", start("watch-2")).await;
+    client.rpc("session/close", json!({"sessionId":id})).await;
+    client
+        .rpc(
+            "session/resume",
+            json!({"sessionId":id,"cwd":client.directory.path(),"mcpServers":[]}),
+        )
+        .await;
+    let state = client
+        .rpc(
+            "_codex/request",
+            json!({"version":1,"sessionId":id,"method":"thread/read","params":{"threadId":id}}),
+        )
+        .await;
+    assert_eq!(state["streamStops"], json!(["watch-1", "watch-2"]));
+    assert_eq!(state["activeStreams"], json!([]));
+    client.shutdown().await;
+}
+
+#[tokio::test]
+async fn history_mutations_publish_reset_boundaries_and_authoritative_replay() {
+    let mut client = Client::start(true).await;
+    let id = client.new_session(Value::Null).await;
+    for text in ["keep", "remove"] {
+        client
+            .rpc(
+                "session/prompt",
+                json!({"sessionId":id,"prompt":[{"type":"text","text":text}]}),
+            )
+            .await;
+        client.matching(|frame| is_state(frame, "idle")).await;
+    }
+    for (method, params) in [
+        ("thread/rollback", json!({"threadId":id,"numTurns":1})),
+        (
+            "thread/revert",
+            json!({"threadId":id,"beforeTurnId":"turn-1"}),
+        ),
+    ] {
+        client.backlog.clear();
+        client
+            .rpc(
+                "_codex/request",
+                json!({"version":1,"sessionId":id,"method":method,"params":params}),
+            )
+            .await;
+        let boundaries: Vec<_> = client
+            .backlog
+            .iter()
+            .filter(|frame| frame["method"] == "_codex/sessionReset")
+            .collect();
+        assert_eq!(boundaries.len(), 2);
+        assert_eq!(boundaries[0]["params"]["phase"], "start");
+        assert_eq!(boundaries[1]["params"]["phase"], "complete");
+        assert_eq!(
+            boundaries[0]["params"]["revision"],
+            boundaries[1]["params"]["revision"]
+        );
+        let replayed: Vec<_> = client
+            .backlog
+            .iter()
+            .filter(|frame| frame["params"]["update"]["sessionUpdate"] == "agent_message")
+            .map(|frame| frame["params"]["update"]["messageId"].clone())
+            .collect();
+        assert_eq!(
+            replayed,
+            if method == "thread/rollback" {
+                vec![json!("answer-turn-1")]
+            } else {
+                vec![]
+            }
+        );
+    }
+    client
+        .rpc(
+            "session/prompt",
+            json!({"sessionId":id,"prompt":[{"type":"text","text":"fresh"}]}),
+        )
+        .await;
+    client.matching(|frame| is_state(frame, "idle")).await;
+    client.shutdown().await;
 }
 
 #[tokio::test]
@@ -643,6 +852,31 @@ async fn extensions_are_negotiated_bidirectional_and_share_authoritative_session
     assert_eq!(
         threads["data"][0]["childInterrupted"], true,
         "closing the root must stop outstanding child foreground work"
+    );
+    client.backlog.clear();
+    client.rpc("session/resume",json!({"sessionId":id,"cwd":client.directory.path(),"mcpServers":[],"replayFrom":{"type":"start"}})).await;
+    let child_tools: Vec<_> = client
+        .backlog
+        .iter()
+        .filter(|frame| {
+            frame["params"]["update"]["sessionUpdate"] == "tool_call_update"
+                && frame["params"]["update"]["toolCallId"] == "codex-child:child:child-tool"
+        })
+        .collect();
+    assert_eq!(
+        child_tools.len(),
+        1,
+        "child tool entities shown live must also survive full root replay"
+    );
+    assert_eq!(child_tools[0]["params"]["update"]["status"], "failed");
+    assert!(
+        !client
+            .backlog
+            .iter()
+            .any(|frame| frame["params"]["update"]["messageId"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("codex-child:"))),
+        "child assistant messages are not parent chat messages"
     );
     client.shutdown().await;
 }

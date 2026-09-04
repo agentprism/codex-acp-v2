@@ -1,9 +1,13 @@
 //! ACP v2 frontend and the independently running Codex event pump.
 
+mod controls;
 mod events;
+mod extension_requests;
 mod handlers;
+mod history;
 mod lifecycle;
 mod ownership;
+mod resources;
 mod teardown;
 
 use std::{
@@ -49,6 +53,7 @@ impl Default for ServerOptions {
 #[derive(Clone)]
 struct Server {
     backend: Backend,
+    mcp: crate::mcp::McpManager,
     state: Arc<Mutex<State>>,
     options: Arc<ServerOptions>,
     policy: Arc<ExtensionPolicy>,
@@ -65,6 +70,7 @@ struct State {
     negotiation: Option<Negotiation>,
     sessions: HashMap<String, Arc<Session>>,
     descendant_roots: HashMap<String, String>,
+    mcp_subscriptions: HashMap<String, String>,
     models: Vec<Value>,
     pending: HashMap<String, PendingInteraction>,
     disconnected: Option<String>,
@@ -91,6 +97,7 @@ enum InteractionCancellation {
 
 struct Session {
     gate: Mutex<()>,
+    admission: Mutex<()>,
     delivery: Mutex<()>,
     data: Mutex<SessionData>,
     changed: Notify,
@@ -103,14 +110,25 @@ struct SessionData {
     last_completed_turn: Option<String>,
     replayed_finalized: HashSet<String>,
     settings_generation: u64,
+    pending_settings: Option<PendingSettings>,
+    history_revision: u64,
+    reconciled_revert_notification: bool,
     configuration: Configuration,
     projector: Projector,
+    mcp_leases: crate::mcp::McpLeases,
+}
+
+#[derive(Clone)]
+struct PendingSettings {
+    generation: u64,
+    patch: serde_json::Map<String, Value>,
 }
 
 impl Session {
     fn new(configuration: Configuration) -> Self {
         Self {
             gate: Mutex::new(()),
+            admission: Mutex::new(()),
             delivery: Mutex::new(()),
             data: Mutex::new(SessionData {
                 open: true,
@@ -119,8 +137,12 @@ impl Session {
                 last_completed_turn: None,
                 replayed_finalized: HashSet::new(),
                 settings_generation: 0,
+                pending_settings: None,
+                history_revision: 0,
+                reconciled_revert_notification: false,
                 configuration,
                 projector: Projector::default(),
+                mcp_leases: crate::mcp::McpLeases::default(),
             }),
             changed: Notify::new(),
         }
@@ -261,6 +283,9 @@ impl Server {
 }
 
 fn rpc_error(error: anyhow::Error) -> agent_client_protocol::Error {
+    if let Some(error) = error.downcast_ref::<agent_client_protocol::Error>() {
+        return error.clone();
+    }
     if let Some(crate::backend::BackendError::Rpc(error)) =
         error.downcast_ref::<crate::backend::BackendError>()
     {
@@ -304,6 +329,7 @@ pub async fn run(options: ServerOptions) -> Result<()> {
     let (registrations, registration_receiver) = mpsc::channel(8);
     let server = Server {
         backend: backend.clone(),
+        mcp: crate::mcp::McpManager::new(options.interaction_timeout),
         state: Arc::new(Mutex::new(State::default())),
         policy: Arc::new(ExtensionPolicy::new(options.allow_host_methods)),
         creation_gate: Arc::new(Mutex::new(())),

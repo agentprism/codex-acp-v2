@@ -125,7 +125,13 @@ impl Server {
             .or_else(|| params.pointer("/thread/id").and_then(Value::as_str));
         let owner = match thread_id {
             Some(id) => self.owner_for_thread(id).await?,
-            None => None,
+            None => {
+                let state = self.state.lock().await;
+                params
+                    .get("subscriptionId")
+                    .and_then(Value::as_str)
+                    .and_then(|id| state.mcp_subscriptions.get(id).cloned())
+            }
         };
         let state = self.state.lock().await;
         let session = owner
@@ -140,16 +146,42 @@ impl Server {
         drop(state);
         if let (Some(id), Some(session)) = (owner.as_deref(), session) {
             let _delivery = session.delivery.lock().await;
+            if method == "thread/reverted" && thread_id == Some(id) {
+                let already_reconciled =
+                    std::mem::take(&mut session.data.lock().await.reconciled_revert_notification);
+                if !already_reconciled {
+                    if self
+                        .state
+                        .lock()
+                        .await
+                        .negotiation
+                        .as_ref()
+                        .is_some_and(|negotiation| negotiation.session_reset)
+                    {
+                        self.reset_history(id, &session, method, connection).await?;
+                    } else {
+                        self.notification_failure(connection, id, "history reconciliation", anyhow::anyhow!("backend replaced history; this client must reopen its transcript because it did not negotiate sessionReset")).await?;
+                    }
+                }
+            }
             let mut data = session.data.lock().await;
             let mut updates = Vec::new();
             let descendant = thread_id.filter(|thread| *thread != id);
             if let Some(child) = descendant {
-                updates.extend(child_tool_updates(
-                    &mut data.projector,
-                    method,
-                    &params,
-                    child,
-                )?);
+                let item_id = params
+                    .get("itemId")
+                    .and_then(Value::as_str)
+                    .or_else(|| params.pointer("/item/id").and_then(Value::as_str));
+                let stale = (method.ends_with("/delta")
+                    || method.ends_with("Delta")
+                    || method == "item/started")
+                    && item_id.is_some_and(|item_id| {
+                        data.replayed_finalized
+                            .contains(&crate::projection::child_item_id(child, item_id))
+                    });
+                if !stale {
+                    updates.extend(data.projector.project_child(method, &params, child)?);
+                }
             } else {
                 match method {
                     "turn/started" => {
@@ -284,12 +316,20 @@ impl Server {
             .negotiation
             .as_ref()
             .is_some_and(|negotiation| negotiation.server_requests);
-        let mut interaction = match interactions::translate(
-            session_id.as_deref().unwrap_or(""),
-            &method,
-            &params,
-            &capabilities,
-        ) {
+        let raw_callback = state
+            .negotiation
+            .as_ref()
+            .is_some_and(|negotiation| negotiation.wants_raw_callback(&method));
+        let mut interaction = match if raw_callback {
+            Ok(None)
+        } else {
+            interactions::translate(
+                session_id.as_deref().unwrap_or(""),
+                &method,
+                &params,
+                &capabilities,
+            )
+        } {
             Ok(interaction) => interaction,
             Err(error) => {
                 drop(state);
@@ -475,49 +515,4 @@ fn event_thread_id(event: &BackendEvent) -> Option<&str> {
         }
         BackendEvent::Disconnected { .. } => None,
     }
-}
-
-fn child_tool_updates(
-    projector: &mut crate::projection::Projector,
-    method: &str,
-    params: &Value,
-    thread_id: &str,
-) -> Result<Vec<v2::SessionUpdate>> {
-    let item_event = matches!(method, "item/started" | "item/completed")
-        && matches!(
-            params["item"]["type"].as_str(),
-            Some(
-                "commandExecution"
-                    | "fileChange"
-                    | "mcpToolCall"
-                    | "dynamicToolCall"
-                    | "webSearch"
-                    | "imageView"
-                    | "imageGeneration"
-                    | "sleep"
-                    | "collabAgentToolCall"
-                    | "subAgentActivity"
-            )
-        );
-    let tool_event = matches!(
-        method,
-        "item/commandExecution/outputDelta"
-            | "item/fileChange/outputDelta"
-            | "item/fileChange/patchUpdated"
-            | "item/mcpToolCall/progress"
-    );
-    if !item_event && !tool_event {
-        return Ok(Vec::new());
-    }
-    let mut projected = params.clone();
-    let id = if item_event {
-        &mut projected["item"]["id"]
-    } else {
-        &mut projected["itemId"]
-    };
-    *id = Value::String(super::ownership::child_item_id(
-        thread_id,
-        id.as_str().context("child tool event missing item id")?,
-    ));
-    projector.project(method, &projected)
 }

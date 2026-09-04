@@ -4,11 +4,11 @@ use agent_client_protocol::{
     Agent, Client, JsonRpcMessage, JsonRpcRequest, Responder, UntypedMessage, V2ConnectionTo,
     schema::{ProtocolVersion, v2},
 };
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 use serde_json::{Value, json, value::to_raw_value};
 
 use super::{EventReceiver, Server, rpc_error};
-use crate::extensions::{Negotiation, RequestEnvelope, RequestScope};
+use crate::extensions::Negotiation;
 
 // Every potentially blocking operation runs outside the ACP dispatch callback.
 // Permission replies, event projection and cancellation remain independently live.
@@ -138,25 +138,55 @@ pub(super) async fn serve(server: Server, events: EventReceiver) -> Result<()> {
         Value,
         |server, request, cx| server.extension(request.0, &cx)
     );
+    let builder = handler!(
+        builder,
+        server,
+        v2::MessageMcpRequest,
+        v2::MessageMcpResponse,
+        |server, request, _cx| async move { server.mcp.request(request).await.map_err(Into::into) }
+    );
+    let mcp = server.mcp.clone();
+    let builder = builder.on_receive_notification(
+        async move |request: v2::MessageMcpNotification, connection: V2ConnectionTo<Client>| {
+            let mcp = mcp.clone();
+            connection.spawn(async move {
+                if let Err(error) = mcp.notify(request).await {
+                    tracing::warn!(error = %error, "native MCP notification failed; endpoint closed");
+                }
+                Ok(())
+            })
+        }, agent_client_protocol::on_receive_notification!());
     builder
         .on_receive_notification(
             async move |request: v2::CancelSessionNotification,
                         connection: V2ConnectionTo<Client>| {
                 let server = server.clone();
-                let permit = server
-                    .request_slots
-                    .clone()
-                    .try_acquire_owned()
-                    .map_err(|_| {
-                        agent_client_protocol::Error::new(-32000, "too many in-flight ACP requests")
-                    })?;
+                let permit = match server.request_slots.clone().try_acquire_owned() {
+                    Ok(permit) => permit,
+                    Err(_) => {
+                        server
+                            .notification_failure(
+                                &connection,
+                                &request.session_id.to_string(),
+                                "session/cancel",
+                                anyhow::anyhow!("too many in-flight ACP requests"),
+                            )
+                            .await
+                            .map_err(rpc_error)?;
+                        return Ok(());
+                    }
+                };
                 let task_connection = connection.clone();
                 connection.spawn(async move {
                     let _permit = permit;
-                    server
-                        .cancel(&request.session_id.to_string(), &task_connection)
-                        .await
-                        .map_err(rpc_error)
+                    let id = request.session_id.to_string();
+                    if let Err(error) = server.cancel(&id, &task_connection).await {
+                        server
+                            .notification_failure(&task_connection, &id, "session/cancel", error)
+                            .await
+                            .map_err(rpc_error)?;
+                    }
+                    Ok(())
                 })
             },
             agent_client_protocol::on_receive_notification!(),
@@ -169,7 +199,10 @@ pub(super) async fn serve(server: Server, events: EventReceiver) -> Result<()> {
 impl Server {
     async fn initialize(&self, request: v2::InitializeRequest) -> Result<v2::InitializeResponse> {
         ensure!(!self.state.lock().await.initialized, "already initialized");
-        let negotiation = Negotiation::from_meta(&serde_json::to_value(&request.meta)?)?;
+        let negotiation = Negotiation::from_initialize_meta(
+            &serde_json::to_value(&request.meta)?,
+            &serde_json::to_value(&request.capabilities.meta)?,
+        )?;
         let backend_capabilities = &self.options.backend.capabilities;
         let custom_callbacks = backend_capabilities["requestAttestation"] == true
             || backend_capabilities["mcpServerOpenaiFormElicitation"] == true
@@ -197,7 +230,8 @@ impl Server {
             .mcp(
                 v2::McpCapabilities::new()
                     .stdio(v2::McpStdioCapabilities::new())
-                    .http(v2::McpHttpCapabilities::new()),
+                    .http(v2::McpHttpCapabilities::new())
+                    .acp(v2::McpAcpCapabilities::new()),
             )
             .prompt(
                 v2::PromptCapabilities::new()
@@ -205,154 +239,18 @@ impl Server {
                     .audio(v2::PromptAudioCapabilities::new())
                     .embedded_context(v2::PromptEmbeddedContextCapabilities::new()),
             );
+        let metadata =
+            serde_json::from_value::<v2::Meta>(json!({"codex":self.policy.capabilities()}))?;
         Ok(v2::InitializeResponse::new(
             ProtocolVersion::V2,
             v2::Implementation::new("codex-acp-v2", env!("CARGO_PKG_VERSION")),
         )
-        .capabilities(v2::AgentCapabilities::new().session(session))
-        .meta(serde_json::from_value::<v2::Meta>(
-            json!({"codex":self.policy.capabilities()}),
-        )?))
-    }
-
-    async fn extension(
-        &self,
-        request: v2::ExtRequest,
-        connection: &V2ConnectionTo<Client>,
-    ) -> Result<Value> {
-        ensure!(
-            request.method.as_ref() == "_codex/request",
-            "unsupported ACP extension method"
-        );
-        ensure!(
-            self.state.lock().await.extensions,
-            "Codex extensions must be negotiated during initialize"
-        );
-        let envelope: RequestEnvelope = serde_json::from_str(request.params.get())?;
-        if envelope.method == "account/login/start"
-            && envelope.params["type"] == "chatgptAuthTokens"
-        {
-            ensure!(
-                self.state
-                    .lock()
-                    .await
-                    .negotiation
-                    .as_ref()
-                    .is_some_and(|negotiation| negotiation.server_requests),
-                "external token authentication requires serverRequests for token refresh"
-            );
-        }
-        let detached_review =
-            envelope.method == "review/start" && envelope.params["delivery"] == "detached";
-        let _creation = if detached_review {
-            Some(self.creation_gate.lock().await)
-        } else {
-            None
-        };
-        if detached_review {
-            ensure!(
-                self.state.lock().await.sessions.len() < self.options.max_sessions,
-                "open session limit reached"
-            );
-        }
-        let requested_thread = envelope.params.get("threadId").and_then(Value::as_str);
-        let scope = if let (Some(root), Some(child)) =
-            (envelope.session_id.as_deref(), requested_thread)
-            && root != child
-            && matches!(
-                envelope.method.as_str(),
-                "thread/read" | "thread/turns/list" | "thread/items/list"
-            ) {
-            ensure!(
-                self.owner_for_thread(child).await?.as_deref() == Some(root),
-                "requested thread is not a descendant of the owned session"
-            );
-            // Verify policy against the root session only after backend-verified ancestry.
-            // The original child id remains intact in the forwarded read-only request.
-            let mut params = envelope.params.clone();
-            params["threadId"] = json!(root);
-            let authorized = RequestEnvelope {
-                version: envelope.version,
-                session_id: envelope.session_id.clone(),
-                method: envelope.method.clone(),
-                params,
-            };
-            self.policy
-                .authorize(&authorized, &self.owned_threads().await)?
-        } else {
-            self.policy
-                .authorize(&envelope, &self.owned_threads().await)?
-        };
-        let session = match &scope {
-            RequestScope::Thread(id) => Some(self.session(id).await?),
-            _ => None,
-        };
-        let _gate = if let Some(session) = &session {
-            Some(session.gate.lock().await)
-        } else {
-            None
-        };
-        if let Some(session) = &session {
-            let data = session.data.lock().await;
-            ensure!(data.open && !data.closing, "session is closed or closing");
-            if envelope.method == "turn/start" {
-                ensure!(
-                    data.active_turn.is_none(),
-                    "foreground work already active; steer it explicitly"
-                );
-            }
-        }
-        if envelope.method == "turn/settings/update" {
-            let session = session
-                .as_ref()
-                .context("live turn settings require a session")?;
-            let data = session.data.lock().await;
-            ensure!(
-                envelope.params["turnId"].as_str().is_some()
-                    && envelope.params["turnId"].as_str() == data.active_turn.as_deref(),
-                "live settings must target the active turn id"
-            );
-        }
-        let response = if detached_review {
-            self.setup_request(&envelope.method, envelope.params)
-                .await?
-        } else {
-            self.backend
-                .request(&envelope.method, envelope.params)
-                .await?
-        };
-        if envelope.method == "turn/start"
-            && let Some(session) = &session
-        {
-            let mut data = session.data.lock().await;
-            let turn_id = response
-                .pointer("/turn/id")
-                .and_then(Value::as_str)
-                .context("turn/start response missing turn id")?;
-            if response["turn"]["status"] == "inProgress"
-                && data.last_completed_turn.as_deref() != Some(turn_id)
-            {
-                data.active_turn = Some(turn_id.to_owned());
-            }
-        }
-        if envelope.method == "review/start"
-            && let Some(review_id) = response.get("reviewThreadId").and_then(Value::as_str)
-            && envelope.session_id.as_deref() != Some(review_id)
-        {
-            let source = session
-                .as_ref()
-                .context("detached review requires a source session")?;
-            let configuration = source.data.lock().await.configuration.clone();
-            self.register(review_id.to_owned(), configuration).await?;
-        }
-        if matches!(envelope.method.as_str(), "thread/archive" | "thread/delete")
-            && let Some(id) = envelope.session_id
-        {
-            self.cancel_interactions(&id).await;
-            self.state.lock().await.sessions.remove(&id);
-            self.idle(connection, &id, true).await?;
-        }
-        Ok(response)
+        .capabilities(
+            v2::AgentCapabilities::new()
+                .session(session)
+                .meta(metadata.clone()),
+        )
+        .meta(metadata))
     }
 }
 

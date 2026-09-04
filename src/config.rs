@@ -13,6 +13,58 @@ pub(crate) struct Configuration {
 }
 
 impl Configuration {
+    /// Whether the patch leaves the currently projected effective settings
+    /// unchanged. Codex suppresses duplicate settings notifications, so callers
+    /// must not wait for an event for these acknowledged no-op requests.
+    pub fn is_settings_noop(&self, patch: &Map<String, Value>) -> bool {
+        self.settings_match(patch) && patch.get("collaborationMode").is_none_or(|value| {
+            value.is_null() || self.settings.get("collaborationMode") == Some(value)
+        })
+    }
+
+    /// Match a later authoritative snapshot against a desired effective patch.
+    /// Null collaboration instructions select backend-private built-in text;
+    /// match the mode/model/effort, not that unavailable text template.
+    pub fn settings_match(&self, patch: &Map<String, Value>) -> bool {
+        patch.iter().all(|(key, value)| {
+            if matches!(key.as_str(), "threadId" | "multiAgentMode") {
+                return true;
+            }
+            // Only serviceTier distinguishes an explicit null from omission.
+            if value.is_null() && key != "serviceTier" {
+                return true;
+            }
+            match key.as_str() {
+                "permissions" => {
+                    self.settings
+                        .get("activePermissionProfile")
+                        .and_then(|profile| profile.get("id"))
+                        == Some(value)
+                }
+                "cwd" => value
+                    .as_str()
+                    .zip(self.settings.get(key).and_then(Value::as_str))
+                    .is_some_and(|(left, right)| {
+                        std::path::Path::new(left) == std::path::Path::new(right)
+                    }),
+                "sandboxPolicy" => {
+                    self.settings
+                            .get(key)
+                            .is_some_and(|current| same_sandbox(current, value))
+                }
+                "collaborationMode" => self.settings.get(key).is_some_and(|current| {
+                    current["mode"] == value["mode"]
+                        && current["settings"]["model"] == value["settings"]["model"]
+                        && current["settings"]["reasoning_effort"] == value["settings"]["reasoning_effort"]
+                        && (value["settings"]["developer_instructions"].is_null()
+                            || current["settings"]["developer_instructions"] == value["settings"]["developer_instructions"])
+                }),
+                "serviceTier" => self.settings.get(key).unwrap_or(&Value::Null) == value,
+                _ => self.settings.get(key) == Some(value),
+            }
+        })
+    }
+
     pub fn from_response(response: &Value, models: Vec<Value>) -> Self {
         let mut settings = response.as_object().cloned().unwrap_or_default();
         settings.remove("thread");
@@ -208,6 +260,45 @@ impl Configuration {
     }
 }
 
+fn same_sandbox(current: &Value, requested: &Value) -> bool {
+    if current["type"] != requested["type"] {
+        return false;
+    }
+    let fields: &[&str] = match requested["type"].as_str() {
+        Some("dangerFullAccess") => &["type"],
+        Some("readOnly" | "externalSandbox") => &["type", "networkAccess"],
+        Some("workspaceWrite") => &["type", "networkAccess", "writableRoots", "excludeTmpdirEnvVar", "excludeSlashTmp"],
+        _ => return current == requested,
+    };
+    if [current, requested].iter().any(|value| value.as_object().is_none_or(|object| {
+        object.keys().any(|key| !fields.contains(&key.as_str()))
+    })) {
+        return false;
+    }
+    match requested["type"].as_str() {
+        Some("dangerFullAccess") => true,
+        Some("readOnly") => {
+            current["networkAccess"].as_bool().unwrap_or_default()
+                == requested["networkAccess"].as_bool().unwrap_or_default()
+        }
+        Some("externalSandbox") => {
+            current["networkAccess"].as_str().unwrap_or("restricted")
+                == requested["networkAccess"].as_str().unwrap_or("restricted")
+        }
+        Some("workspaceWrite") => {
+            ["networkAccess", "excludeTmpdirEnvVar", "excludeSlashTmp"]
+                .iter()
+                .all(|key| {
+                    current[key].as_bool().unwrap_or_default()
+                        == requested[key].as_bool().unwrap_or_default()
+                })
+                && current.get("writableRoots").unwrap_or(&json!([]))
+                    == requested.get("writableRoots").unwrap_or(&json!([]))
+        }
+        _ => current == requested,
+    }
+}
+
 fn select(id: &str, label: &str, current: &str, choices: &[&str]) -> v2::SessionConfigOption {
     v2::SessionConfigOption::select(
         id,
@@ -246,13 +337,21 @@ pub(crate) fn metadata(
     }
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum ThreadOperation {
+    Start,
+    Resume,
+    Fork,
+}
+
 pub(crate) fn thread_parameters(
+    operation: ThreadOperation,
     cwd: &v2::AbsolutePath,
     roots: &[v2::AbsolutePath],
     servers: &[v2::McpServer],
     mut extra: Map<String, Value>,
 ) -> Result<Value> {
-    const ALLOWED: &[&str] = &[
+    const COMMON: &[&str] = &[
         "model",
         "modelProvider",
         "serviceTier",
@@ -263,19 +362,23 @@ pub(crate) fn thread_parameters(
         "config",
         "baseInstructions",
         "developerInstructions",
-        "personality",
-        "ephemeral",
-        "historyMode",
-        "environments",
-        "dynamicTools",
-        "selectedCapabilityRoots",
-        "experimentalRawEvents",
-        "allowProviderModelFallback",
     ];
+    let allowed = match operation {
+        ThreadOperation::Start => &["ephemeral", "historyMode", "environments", "dynamicTools",
+            "selectedCapabilityRoots", "experimentalRawEvents", "allowProviderModelFallback",
+            "serviceName", "sessionStartSource", "threadSource", "projectId", "personality"][..],
+        ThreadOperation::Resume => &["personality"],
+        ThreadOperation::Fork => &["lastTurnId", "beforeTurnId", "threadSource", "deferGoalContinuation", "ephemeral"],
+    };
     for key in extra.keys() {
-        if !ALLOWED.contains(&key.as_str()) {
-            bail!("unsupported thread creation field {key}");
+        if !COMMON.contains(&key.as_str()) && !allowed.contains(&key.as_str()) {
+            bail!("unsupported field for this thread operation: {key}");
         }
+    }
+    if extra.get("lastTurnId").is_some_and(|value| !value.is_null())
+        && extra.get("beforeTurnId").is_some_and(|value| !value.is_null())
+    {
+        bail!("lastTurnId and beforeTurnId cannot be combined");
     }
     extra.insert("cwd".into(), serde_json::to_value(cwd)?);
     let all_roots: Vec<_> = std::iter::once(cwd).chain(roots).collect();
