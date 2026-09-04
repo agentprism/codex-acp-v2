@@ -3,7 +3,7 @@ use anyhow::{Context, Result};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::Value;
 
-use super::{required, terminal_id, text};
+use super::{required, rich_content, terminal_id, text};
 
 pub(super) fn project(item: &Value, completed: bool) -> Result<Vec<v2::SessionUpdate>> {
     let id = required(item, "id")?;
@@ -27,7 +27,14 @@ pub(super) fn project(item: &Value, completed: bool) -> Result<Vec<v2::SessionUp
             v2::ToolKind::Other,
         ),
         "dynamicToolCall" => (required(item, "tool")?.into(), v2::ToolKind::Other),
-        "webSearch" => ("Search the web".into(), v2::ToolKind::Search),
+        "webSearch" => (
+            item["query"]
+                .as_str()
+                .filter(|query| !query.is_empty())
+                .map(|query| format!("Search: {query}"))
+                .unwrap_or_else(|| "Search the web".into()),
+            v2::ToolKind::Search,
+        ),
         "imageView" => (
             format!("View {}", required(item, "path")?),
             v2::ToolKind::Read,
@@ -97,11 +104,19 @@ pub(super) fn project(item: &Value, completed: bool) -> Result<Vec<v2::SessionUp
                 if let Some(blocks) = result["content"].as_array() {
                     for block in blocks {
                         // MCP and ACP share standard content schemas; unknown content remains raw output.
-                        if let Ok(block) = serde_json::from_value::<v2::ContentBlock>(block.clone())
-                        {
-                            content.push(block.into());
-                        }
+                        content.push(
+                            match serde_json::from_value::<v2::ContentBlock>(block.clone()) {
+                                Ok(block) => block.into(),
+                                Err(_) => text(serde_json::to_string_pretty(block)?).into(),
+                            },
+                        );
                     }
+                }
+                if let Some(structured) = result
+                    .get("structuredContent")
+                    .filter(|value| !value.is_null())
+                {
+                    content.push(text(serde_json::to_string_pretty(structured)?).into());
                 }
                 update = update.raw_output(result.clone());
             }
@@ -117,14 +132,11 @@ pub(super) fn project(item: &Value, completed: bool) -> Result<Vec<v2::SessionUp
                 for block in blocks {
                     if let Some(value) = block["text"].as_str() {
                         content.push(text(value).into());
-                    } else if let Some(url) = block["imageUrl"].as_str()
-                        && let Some((mime, data)) = url
-                            .strip_prefix("data:")
-                            .and_then(|value| value.split_once(";base64,"))
+                    } else if let Some(url) = block["imageUrl"]
+                        .as_str()
+                        .or_else(|| block["audioUrl"].as_str())
                     {
-                        content.push(
-                            v2::ContentBlock::Image(v2::ImageContent::new(data, mime)).into(),
-                        );
+                        content.push(rich_content::media_reference(url).into());
                     }
                 }
                 update = update.raw_output(item["contentItems"].clone());
@@ -132,6 +144,38 @@ pub(super) fn project(item: &Value, completed: bool) -> Result<Vec<v2::SessionUp
             if item["success"] == false {
                 update = update.status(v2::ToolCallStatus::Failed);
             }
+        }
+        "imageGeneration" => {
+            content.extend(rich_content::generated_image(item)?);
+            update = update.raw_output(item.clone());
+        }
+        "webSearch" => {
+            content.extend(rich_content::web_search(item)?);
+            update = update.raw_output(item.clone());
+        }
+        "imageView" => {
+            content.push(
+                text(format!(
+                    "Image in the execution environment: {}",
+                    required(item, "path")?
+                ))
+                .into(),
+            );
+            update = update.raw_output(item.clone());
+        }
+        "functionCallOutput" => {
+            if let Some(output) = item.get("output") {
+                content.push(
+                    text(
+                        output
+                            .as_str()
+                            .map(str::to_owned)
+                            .unwrap_or(serde_json::to_string_pretty(output)?),
+                    )
+                    .into(),
+                );
+            }
+            update = update.raw_output(item.clone());
         }
         _ => {
             update = update.raw_output(item.clone());
@@ -162,17 +206,42 @@ fn file_changes(changes: &Value) -> Result<(Vec<v2::ToolCallContent>, Vec<v2::To
         if let Ok(path) = serde_json::from_value::<v2::AbsolutePath>(Value::String(path.to_owned()))
         {
             locations.push(v2::ToolCallLocation::new(path.clone()));
-            let operation = match change["kind"]["type"].as_str() {
-                Some("add") => v2::DiffChange::add(path),
-                Some("delete") => v2::DiffChange::delete(path),
+            let move_path = change["kind"]["move_path"].as_str();
+            let operation = match (change["kind"]["type"].as_str(), move_path) {
+                (Some("add"), _) => v2::DiffChange::add(path),
+                (Some("delete"), _) => v2::DiffChange::delete(path),
+                (Some("update"), Some(destination)) => {
+                    let Ok(destination) = serde_json::from_value::<v2::AbsolutePath>(
+                        Value::String(destination.to_owned()),
+                    ) else {
+                        content.push(
+                            text(format!(
+                                "Move {} to {destination}\n{patch}",
+                                required(change, "path")?
+                            ))
+                            .into(),
+                        );
+                        continue;
+                    };
+                    locations.push(v2::ToolCallLocation::new(destination.clone()));
+                    v2::DiffChange::move_file(path, destination)
+                }
                 _ => v2::DiffChange::modify(path),
             };
-            content.push(v2::ToolCallContent::Diff(v2::Diff::patch(
-                patch,
-                vec![operation],
-            )));
+            let mut diff = v2::Diff::new(vec![operation]);
+            if let Some(patch) = super::patches::git_patch(change)? {
+                diff = diff.with_patch(v2::DiffPatch::new(patch));
+            } else {
+                content.push(text(format!("{}\n{patch}", required(change, "path")?)).into());
+            }
+            content.push(v2::ToolCallContent::Diff(diff));
         } else {
-            content.push(text(format!("{path}\n{patch}")).into());
+            let label = if let Some(destination) = change["kind"]["move_path"].as_str() {
+                format!("Move {path} to {destination}")
+            } else {
+                path.to_owned()
+            };
+            content.push(text(format!("{label}\n{patch}")).into());
         }
     }
     Ok((content, locations))

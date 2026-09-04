@@ -1,7 +1,13 @@
 //! Client-visible projection only: Codex exclusively owns model history and context.
 
+mod children;
+mod diagnostics;
 mod items;
+mod patches;
+mod rich_content;
 mod tools;
+
+pub use children::child_item_id;
 
 use agent_client_protocol::schema::v2;
 use anyhow::{Context, Result, ensure};
@@ -33,7 +39,24 @@ impl Projector {
         );
         let updates = match method {
             "turn/started" => vec![running()],
-            "turn/completed" => vec![idle(&params["turn"])],
+            "turn/completed" => {
+                let turn = &params["turn"];
+                let mut updates = self.replay_turn_diagnostic(turn)?;
+                if let Some(timestamp) = turn["completedAt"].as_i64() {
+                    updates.push(session_activity(timestamp)?);
+                }
+                updates.push(idle(turn));
+                updates
+            }
+            "error" => vec![diagnostics::error(
+                required(params, "turnId")?,
+                &params["error"],
+                params["willRetry"].as_bool().unwrap_or(false),
+            )?],
+            "thread/name/updated" => vec![v2::SessionUpdate::SessionInfoUpdate(
+                v2::SessionInfoUpdate::new()
+                    .title(params["threadName"].as_str().map(str::to_owned)),
+            )],
             "item/started" | "item/completed" => {
                 items::project(&params["item"], method == "item/completed")?
             }
@@ -67,6 +90,18 @@ impl Projector {
                     STANDARD.encode(required(params, "delta")?),
                 ),
             )],
+            "item/commandExecution/terminalInteraction" => {
+                vec![v2::SessionUpdate::ToolCallContentChunk(
+                    v2::ToolCallContentChunk::new(
+                        required(params, "itemId")?,
+                        text(format!(
+                            "Input sent to process {}: {}",
+                            required(params, "processId")?,
+                            required(params, "stdin")?
+                        )),
+                    ),
+                )]
+            }
             "item/fileChange/outputDelta" | "item/mcpToolCall/progress" => {
                 let content = params
                     .get("delta")
@@ -99,6 +134,18 @@ impl Projector {
         Ok(updates)
     }
 
+    /// Reproduce a persisted turn failure without changing foreground state.
+    pub fn replay_turn_diagnostic(&mut self, turn: &Value) -> Result<Vec<v2::SessionUpdate>> {
+        if turn["status"] != "failed" {
+            return Ok(Vec::new());
+        }
+        Ok(vec![diagnostics::error(
+            required(turn, "id")?,
+            &turn["error"],
+            false,
+        )?])
+    }
+
     /// Replay complete hydrated turns in source order, without making inference requests.
     /// The caller must hydrate paginated turns/items before requesting full replay.
     pub fn replay(&mut self, thread: &Value) -> Result<Vec<v2::SessionUpdate>> {
@@ -117,6 +164,7 @@ impl Projector {
             {
                 updates.extend(items::project(item, turn["status"] != "inProgress")?);
             }
+            updates.extend(self.replay_turn_diagnostic(turn)?);
         }
         if let Some(turn) = turns.last() {
             updates.push(if turn["status"] == "inProgress" {
@@ -127,6 +175,14 @@ impl Projector {
         }
         Ok(updates)
     }
+}
+
+fn session_activity(timestamp: i64) -> Result<v2::SessionUpdate> {
+    let timestamp = time::OffsetDateTime::from_unix_timestamp(timestamp)?
+        .format(&time::format_description::well_known::Rfc3339)?;
+    Ok(v2::SessionUpdate::SessionInfoUpdate(
+        v2::SessionInfoUpdate::new().updated_at(timestamp),
+    ))
 }
 
 pub(crate) fn text(value: impl Into<String>) -> v2::ContentBlock {

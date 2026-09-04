@@ -151,3 +151,140 @@ fn input_keeps_resource_data_unprivileged_and_rejects_invalid_media() -> Result<
     );
     Ok(())
 }
+
+#[test]
+fn retries_final_failures_and_replay_upsert_one_visible_diagnostic_without_extensions() -> Result<()>
+{
+    let mut projector = Projector::default();
+    let error = json!({"message":"Model unavailable","additionalDetails":"Choose an available model.","codexErrorInfo":"modelNotFound"});
+    let turn = json!({"id":"failed-turn","status":"failed","items":[],"error":error});
+    let mut updates = projector.project(
+        "error",
+        &json!({"turnId":"failed-turn","error":error,"willRetry":true}),
+    )?;
+    updates.extend(projector.project("turn/completed", &json!({"turn":turn}))?);
+    let expected = BTreeMap::from([(
+        "failed-turn:diagnostic".into(),
+        "Codex error: Model unavailable\n\nChoose an available model.".into(),
+    )]);
+    assert_eq!(render(updates)?, expected);
+    assert_eq!(
+        render(projector.replay(&json!({"turns":[turn]}))?)?,
+        expected
+    );
+    let cleared = projector.project("thread/name/updated", &json!({"threadName":null}))?;
+    assert_eq!(
+        serde_json::to_value(cleared)?,
+        json!([{"sessionUpdate":"session_info_update","title":null}])
+    );
+    let renamed = projector.project(
+        "thread/name/updated",
+        &json!({"threadName":"Working title"}),
+    )?;
+    assert_eq!(
+        serde_json::to_value(renamed)?,
+        json!([{"sessionUpdate":"session_info_update","title":"Working title"}])
+    );
+    Ok(())
+}
+
+#[test]
+fn renamed_files_and_child_tools_keep_the_same_structured_identity_during_replay() -> Result<()> {
+    let mut projector = Projector::default();
+    let item = json!({"id":"edit-1","type":"fileChange","status":"completed","changes":[{"path":"/workspace/old.rs","kind":{"type":"update","move_path":"/workspace/new.rs"},"diff":"--- /workspace/old.rs\n+++ /workspace/new.rs\n@@ -1 +1 @@\n-old\n+new"}]});
+    let live = projector.project_child("item/completed", &json!({"item":item}), "child-1")?;
+    assert_eq!(projector.replay_child_item(&item, "child-1")?, live);
+    let live = serde_json::to_value(live)?;
+    assert_eq!(live[0]["toolCallId"], "codex-child:child-1:edit-1");
+    assert_eq!(
+        live[0]["content"][0]["changes"],
+        json!([{"operation":"move","oldPath":"/workspace/old.rs","path":"/workspace/new.rs"}])
+    );
+    assert_eq!(
+        live[0]["locations"],
+        json!([{"path":"/workspace/old.rs"},{"path":"/workspace/new.rs"}])
+    );
+    assert!(
+        projector
+            .project_child(
+                "turn/completed",
+                &json!({"turn":{"status":"completed"}}),
+                "child-1"
+            )?
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[test]
+fn inline_images_and_web_results_have_renderable_content_without_fetching_resources() -> Result<()>
+{
+    let mut projector = Projector::default();
+    let image = json!({"id":"image-1","type":"imageGeneration","status":"completed","result":"AQID","savedPath":"/not-readable/generated.png","revisedPrompt":null,"failure":null});
+    let projected = serde_json::to_value(projector.replay_item(&image)?)?;
+    assert_eq!(
+        projected[0]["content"],
+        json!([
+            {"type":"content","content":{"type":"image","data":"AQID","mimeType":"image/png"}},
+            {"type":"content","content":{"type":"text","text":"Saved in the execution environment: /not-readable/generated.png"}}
+        ])
+    );
+    let search = json!({"id":"search-1","type":"webSearch","query":"ACP Rust","action":null,"results":[{"type":"text_result","url":"https://example.invalid/acp","title":"ACP","snippet":"Rust protocol documentation","future":{"kept":true}}]});
+    let projected = serde_json::to_value(projector.replay_item(&search)?)?;
+    assert_eq!(
+        projected[0]["content"],
+        json!([
+            {"type":"content","content":{"type":"text","text":"Query: ACP Rust"}},
+            {"type":"content","content":{"type":"resource_link","name":"ACP","uri":"https://example.invalid/acp","description":"Rust protocol documentation"}}
+        ])
+    );
+    assert_eq!(projected[0]["rawOutput"], search);
+    Ok(())
+}
+
+#[test]
+fn file_snapshots_preserve_operations_and_update_hunks_become_real_git_patches() -> Result<()> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let mut projector = Projector::default();
+    for kind in ["add", "delete"] {
+        let updates = serde_json::to_value(projector.replay_item(&json!({
+            "type":"fileChange","id":"patch","status":"completed",
+            "changes":[{"path":"/workspace/example.rs","kind":{"type":kind},"diff":"file text\n"}]
+        }))?)?;
+        assert_eq!(
+            updates[0]["content"],
+            json!([
+                {"type":"content","content":{"type":"text","text":"/workspace/example.rs\nfile text\n"}},
+                {"type":"diff","changes":[{"operation":kind,"path":"/workspace/example.rs"}]}
+            ])
+        );
+    }
+    {
+        let source = "@@ -1 +1 @@\n-old\n+new\n";
+        let updates = serde_json::to_value(projector.replay_item(&json!({
+            "type":"fileChange","id":"patch","status":"completed",
+            "changes":[{"path":"/workspace/example.rs","kind":{"type":"update"},"diff":source}]
+        }))?)?;
+        let patch = updates[0]["content"][0]["patch"]["text"].as_str().unwrap();
+        let mut git = Command::new("git")
+            .args(["apply", "--numstat", "--unsafe-paths"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        git.stdin.take().unwrap().write_all(patch.as_bytes())?;
+        let output = git.wait_with_output()?;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8(output.stdout)?,
+            "1\t1\tworkspace/example.rs\n"
+        );
+    }
+    Ok(())
+}
