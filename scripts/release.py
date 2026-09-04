@@ -118,8 +118,11 @@ def release_manifest(tag, directory=Path("dist")):
     return "".join(f"{sha256(directory / name)}  {name}\n" for name in sorted(expected))
 
 
-def github(*arguments, check=True):
-    return subprocess.run(["gh", *arguments], text=True, capture_output=True, check=check)
+def github(*arguments):
+    result = subprocess.run(["gh", *arguments], text=True, capture_output=True, check=False)
+    if result.returncode:
+        raise RuntimeError(f"GitHub CLI failed ({result.returncode}): {result.stderr.strip()}")
+    return result
 
 
 def published_assets(release, paths):
@@ -144,19 +147,26 @@ def publish(tag, repository):
     directory = Path("dist")
     if (directory / "SHA256SUMS").read_text() != release_manifest(tag, directory):
         raise ValueError("release checksum manifest does not match the archives")
-    endpoint = f"repos/{repository}/releases/tags/{tag}"
-    response = github("api", endpoint, check=False)
-    if response.returncode:
-        if "(HTTP 404)" not in response.stderr:
-            raise RuntimeError(response.stderr)
-        arguments = ["release", "create", tag, "--repo", repository, "--verify-tag", "--draft", "--title", tag, "--generate-notes"]
-        if "-" in tag:
-            arguments.append("--prerelease")
-        github(*arguments)
-        response = github("api", endpoint)
-    release = json.loads(response.stdout)
+    # The by-tag REST endpoint only returns published releases. The authenticated
+    # listing includes drafts, which must be reused after an interrupted upload.
+    endpoint = f"repos/{repository}/releases"
+    pages = json.loads(github("api", f"{endpoint}?per_page=100", "--paginate", "--slurp").stdout)
+    matches = [entry for page in pages for entry in page if entry["tag_name"] == tag]
+    if len(matches) > 1:
+        raise ValueError("multiple releases use this tag; refusing an ambiguous publication")
+    if matches:
+        release = matches[0]
+    else:
+        release = json.loads(github(
+            "api", endpoint, "--method", "POST",
+            "--raw-field", f"tag_name={tag}", "--raw-field", f"name={tag}",
+            "--raw-field", f"target_commitish={checkout_commit}",
+            "--field", "draft=true", "--field", "generate_release_notes=true",
+            "--field", f"prerelease={str('-' in tag).lower()}",
+        ).stdout)
     if release["tag_name"] != tag:
         raise ValueError("GitHub returned an unexpected release tag")
+    endpoint = f"{endpoint}/{release['id']}"
     paths = {path.name: path for path in directory.iterdir()}
     missing = published_assets(release, paths)
     if not release["draft"]:
@@ -169,7 +179,7 @@ def publish(tag, repository):
     uploaded = json.loads(github("api", endpoint).stdout)
     if published_assets(uploaded, paths):
         raise ValueError("GitHub did not retain all verified release assets")
-    github("release", "edit", tag, "--repo", repository, "--draft=false")
+    github("api", endpoint, "--method", "PATCH", "--field", "draft=false")
     print(f"Published {tag} with {len(paths)} verified assets.")
 
 
