@@ -4,3 +4,5 @@
 !.env.example
 *.log
 __pycache__/
+/dist/
+/THIRD-PARTY-NOTICES.html

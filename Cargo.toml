@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.98.1"
 description = "ACP v2 agent server backed by the Codex app-server"
+repository = "https://github.com/agentprism/codex-acp-v2"
+homepage = "https://github.com/agentprism/codex-acp-v2"
+readme = "README.md"
+keywords = ["acp", "codex", "agent", "protocol"]
+categories = ["command-line-utilities", "development-tools"]
+# Releases are GitHub binaries; crates.io publication is intentionally separate.
 publish = false
 
 [dependencies]

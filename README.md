@@ -1,5 +1,7 @@
 # Codex ACP v2
 
+[![CI](https://github.com/agentprism/codex-acp-v2/actions/workflows/ci.yml/badge.svg)](https://github.com/agentprism/codex-acp-v2/actions/workflows/ci.yml)
+
 A Rust ACP **protocol v2** agent that delegates execution to a Codex app-server
 child. Codex owns inference, tools, sandboxing, MCP, subagents, model history, and
 context management. This adapter owns ACP sessions, configuration translation,
@@ -9,6 +11,64 @@ This uses `Agent.v2()` and `schema::v2`, with the SDK's `unstable_protocol_v2`
 feature. It is not a protocol-v1 adapter merely using a version-2 Rust package.
 The draft SDK is pinned to `agent-client-protocol = 2.1.0`; `Cargo.lock` pins the
 schema to `1.7.0`. Rust `1.98.1` and edition 2024 are pinned in the repository.
+
+This is an independent AgentPrism project, not an official OpenAI product. It
+requires an ACP **v2** client; clients supporting only ACP v1 cannot connect.
+
+## Install a release
+
+Download an archive for your machine from
+[GitHub Releases](https://github.com/agentprism/codex-acp-v2/releases). Archives
+contain the executable, documentation, dependency notices, and build metadata.
+Codex is **not bundled**: install and configure a compatible Codex executable
+separately before launching the adapter.
+
+| Platform | Release target | Archive |
+| --- | --- | --- |
+| macOS, Apple Silicon only | `aarch64-apple-darwin` | `.tar.gz` |
+| Linux, x86-64 | `x86_64-unknown-linux-musl` | `.tar.gz` |
+| Linux, ARM64 | `aarch64-unknown-linux-musl` | `.tar.gz` |
+| Windows, x86-64 | `x86_64-pc-windows-msvc` | `.zip` |
+
+Linux adapter binaries use static musl linking; the separately installed Codex
+executable has its own system requirements. Intel macOS and native Windows ARM64
+releases are not provided. macOS releases are not Developer ID signed or
+notarized, and Windows releases are not Authenticode signed. Operating-system
+security prompts may therefore apply; verify provenance before execution, and
+do not disable system-wide security checks.
+
+For example, with the [GitHub CLI](https://cli.github.com/), download and verify
+the Apple Silicon archive before extracting it:
+
+```sh
+gh release download v0.1.0 --repo agentprism/codex-acp-v2 \
+  --pattern codex-acp-v2-v0.1.0-aarch64-apple-darwin.tar.gz \
+  --pattern SHA256SUMS
+gh attestation verify codex-acp-v2-v0.1.0-aarch64-apple-darwin.tar.gz \
+  --repo agentprism/codex-acp-v2
+shasum -a 256 codex-acp-v2-v0.1.0-aarch64-apple-darwin.tar.gz
+```
+
+Compare the printed digest with that archive's entry in `SHA256SUMS`. On Linux
+use `sha256sum`; on Windows use PowerShell's `Get-FileHash -Algorithm SHA256` and
+`Expand-Archive`. Checksums detect changed bytes; the separate
+[GitHub attestation verification](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations)
+checks the artifact's recorded GitHub build provenance. An attestation is not an
+OS signature or proof that the software is free of vulnerabilities.
+
+After both verification steps succeed, extract the archive:
+
+```sh
+tar -xzf codex-acp-v2-v0.1.0-aarch64-apple-darwin.tar.gz
+```
+
+Put the extracted `codex-acp-v2` binary (`codex-acp-v2.exe` on Windows) on PATH,
+or give its absolute path to your ACP client. On Windows, use a native
+`codex.exe` on PATH or pass `--codex-path 'C:\path\to\codex.exe'`. An npm
+installation's bare `codex.cmd` shim is not found by the adapter's default
+`codex` executable lookup; prefer the native executable bundled by Codex instead
+of adding a shell wrapper. Release automation and maintainer steps are described
+in [CONTRIBUTING.md](CONTRIBUTING.md#releases).
 
 ## Build and run
 
@@ -404,3 +464,7 @@ event routing), `config`, `extensions`, `input`, `projection`, `interactions`,
 and `mcp` (session-owned native transport bridge).
 The Codex repository is a read-only implementation reference, not a build-time
 path dependency.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for CI, dependency updates, and the release
+process; [CHANGELOG.md](CHANGELOG.md) for changes; and [SECURITY.md](SECURITY.md)
+for private vulnerability reporting and trust boundaries.

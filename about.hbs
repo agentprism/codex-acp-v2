@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Codex ACP v2 — third-party notices</title>
+  <style>
+    body { max-width: 80rem; margin: 2rem auto; padding: 0 1rem; font-family: sans-serif; line-height: 1.5; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+    section { border-top: 1px solid; padding-top: 1rem; margin-top: 2rem; }
+  </style>
+</head>
+<body>
+  <h1>Codex ACP v2 — third-party notices</h1>
+  <p>Generated from Cargo.lock by cargo-about. This combined inventory covers all
+  release targets and can include build-time dependencies. A listed component is
+  not necessarily present in every executable. Project and toolchain licensing
+  information is supplied separately in the release archive.</p>
+  {{#each licenses}}
+  <section>
+    <h2>{{name}} ({{id}})</h2>
+    <ul>
+      {{#each used_by}}
+      <li>{{crate.name}} {{crate.version}}{{#if crate.repository}} — {{crate.repository}}{{/if}}</li>
+      {{/each}}
+    </ul>
+    <pre>{{text}}</pre>
+  </section>
+  {{/each}}
+</body>
+</html>

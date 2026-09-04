@@ -11,7 +11,8 @@ or feed replayed UI history back into model context.
 Use the real `agent-client-protocol` v2 surface (`schema::v2`, `Agent.v2()` and
 `unstable_protocol_v2`). The SDK package version alone does not select wire v2.
 Keep the draft SDK pinned and commit Cargo.lock. The reference Codex source is
-available at `/home/vikash/codex`; do not modify that repository for this project.
+https://github.com/openai/codex at the revision documented in README.md. A local
+checkout is an optional read-only reference, never a build-time path dependency.
 
 ## Idiomatic modern Rust
 
@@ -87,6 +88,10 @@ test counts are not goals.
   and `cargo clippy --all-targets -- -D warnings` as appropriate before handoff.
 - Commit coherent completed work with descriptive messages. Stage explicit paths;
   never use broad staging that might include another agent's unfinished changes.
+- Keep Linux, Apple Silicon macOS, and Windows working. Use portable paths and
+  platform-aware fixtures; explicitly mark tests that require Unix execution.
+- Update release notes for user-visible changes. Keep CI actions pinned by commit,
+  tool versions explicit, and release packaging aligned with the documented targets.
 - The primary agent establishes the foundation, then acts as orchestrator. Use
   implementation subagents with explicit file ownership and agreed interfaces.
   Integration and verification are also delegated. Coordinate shared-file edits
