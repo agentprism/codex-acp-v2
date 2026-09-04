@@ -3,6 +3,10 @@
 import json
 import sys
 
+# Protocol streams are UTF-8 even when Windows uses a legacy console code page.
+sys.stdin.reconfigure(encoding="utf-8")
+sys.stdout.reconfigure(encoding="utf-8")
+
 
 def send(frame):
     print(json.dumps(frame), flush=True)

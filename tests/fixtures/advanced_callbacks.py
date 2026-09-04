@@ -7,6 +7,10 @@ import subprocess
 import sys
 import threading
 
+# Protocol streams are UTF-8 even when Windows uses a legacy console code page.
+sys.stdin.reconfigure(encoding="utf-8")
+sys.stdout.reconfigure(encoding="utf-8")
+
 
 def callbacks(cwd):
     return {
@@ -95,7 +99,7 @@ def exercise(binary, host, negotiated):
         args.append("--allow-host-methods")
     if host and negotiated:
         args += ["--backend-capabilities", '{"requestAttestation":true}']
-    process = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    process = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8")
     received = queue.Queue()
     def reader():
         for line in process.stdout:

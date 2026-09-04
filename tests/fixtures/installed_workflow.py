@@ -12,6 +12,10 @@ import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+# Protocol streams are UTF-8 even when Windows uses a legacy console code page.
+sys.stdin.reconfigure(encoding="utf-8")
+sys.stdout.reconfigure(encoding="utf-8")
+
 
 def mcp_peer():
     for line in sys.stdin:
@@ -159,7 +163,7 @@ class Client:
         for key, value in config.items():
             args += ["--codex-arg=-c", f"--codex-arg=model_providers.workflow.{key}={json.dumps(value)}"]
         args += ["--codex-arg=-c", "--codex-arg=features.code_mode=false", "--codex-arg=-c", "--codex-arg=features.unified_exec=true"]
-        self.process = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=None, text=True, env=environment, start_new_session=os.name != "nt")
+        self.process = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=None, encoding="utf-8", env=environment, start_new_session=os.name != "nt")
         threading.Thread(target=self.reader, daemon=True).start()
         self.rpc("initialize", {"protocolVersion": 2, "info": {"name": "workflow-client", "version": "1"}, "capabilities": {"_meta": {"codex": {"version": 1, "events": [], "serverRequests": True}}}})
 

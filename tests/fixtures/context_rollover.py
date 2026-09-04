@@ -7,6 +7,10 @@ import subprocess
 import sys
 import threading
 
+# Protocol streams are UTF-8 even when Windows uses a legacy console code page.
+sys.stdin.reconfigure(encoding="utf-8")
+sys.stdout.reconfigure(encoding="utf-8")
+
 
 def emit(frame):
     print(json.dumps(frame), flush=True)
@@ -58,7 +62,7 @@ def backend():
 def probe(binary):
     process = subprocess.Popen([binary, "--codex-path", sys.executable,
         "--codex-arg", os.path.abspath(__file__), "--codex-arg", "backend",
-        "--request-timeout-seconds", "8"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        "--request-timeout-seconds", "8"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8")
     received = queue.Queue()
     def read():
         for line in process.stdout:
