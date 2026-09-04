@@ -41,7 +41,7 @@ Review dependency advisories and license changes before accepting updates.
 Generate release dependency notices with the pinned tool version:
 
 ```sh
-cargo install cargo-about --version 0.9.2 --locked
+cargo install cargo-about --version 0.9.2 --features cli --locked
 cargo about generate --locked --fail about.hbs --output-file THIRD-PARTY-NOTICES.html
 ```
 
