@@ -255,9 +255,34 @@ impl Server {
                 "open session limit reached"
             );
         }
-        let scope = self
-            .policy
-            .authorize(&envelope, &self.owned_threads().await)?;
+        let requested_thread = envelope.params.get("threadId").and_then(Value::as_str);
+        let scope = if let (Some(root), Some(child)) =
+            (envelope.session_id.as_deref(), requested_thread)
+            && root != child
+            && matches!(
+                envelope.method.as_str(),
+                "thread/read" | "thread/turns/list" | "thread/items/list"
+            ) {
+            ensure!(
+                self.owner_for_thread(child).await?.as_deref() == Some(root),
+                "requested thread is not a descendant of the owned session"
+            );
+            // Verify policy against the root session only after backend-verified ancestry.
+            // The original child id remains intact in the forwarded read-only request.
+            let mut params = envelope.params.clone();
+            params["threadId"] = json!(root);
+            let authorized = RequestEnvelope {
+                version: envelope.version,
+                session_id: envelope.session_id.clone(),
+                method: envelope.method.clone(),
+                params,
+            };
+            self.policy
+                .authorize(&authorized, &self.owned_threads().await)?
+        } else {
+            self.policy
+                .authorize(&envelope, &self.owned_threads().await)?
+        };
         let session = match &scope {
             RequestScope::Thread(id) => Some(self.session(id).await?),
             _ => None,
@@ -268,10 +293,11 @@ impl Server {
             None
         };
         if let Some(session) = &session {
-            ensure!(session.data.lock().await.open, "session is closed");
+            let data = session.data.lock().await;
+            ensure!(data.open && !data.closing, "session is closed or closing");
             if envelope.method == "turn/start" {
                 ensure!(
-                    session.data.lock().await.active_turn.is_none(),
+                    data.active_turn.is_none(),
                     "foreground work already active; steer it explicitly"
                 );
             }
@@ -295,6 +321,20 @@ impl Server {
                 .request(&envelope.method, envelope.params)
                 .await?
         };
+        if envelope.method == "turn/start"
+            && let Some(session) = &session
+        {
+            let mut data = session.data.lock().await;
+            let turn_id = response
+                .pointer("/turn/id")
+                .and_then(Value::as_str)
+                .context("turn/start response missing turn id")?;
+            if response["turn"]["status"] == "inProgress"
+                && data.last_completed_turn.as_deref() != Some(turn_id)
+            {
+                data.active_turn = Some(turn_id.to_owned());
+            }
+        }
         if envelope.method == "review/start"
             && let Some(review_id) = response.get("reviewThreadId").and_then(Value::as_str)
             && envelope.session_id.as_deref() != Some(review_id)

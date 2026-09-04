@@ -3,6 +3,8 @@
 mod events;
 mod handlers;
 mod lifecycle;
+mod ownership;
+mod teardown;
 
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -62,6 +64,7 @@ struct State {
     extensions: bool,
     negotiation: Option<Negotiation>,
     sessions: HashMap<String, Arc<Session>>,
+    descendant_roots: HashMap<String, String>,
     models: Vec<Value>,
     pending: HashMap<String, PendingInteraction>,
     disconnected: Option<String>,
@@ -95,6 +98,7 @@ struct Session {
 
 struct SessionData {
     open: bool,
+    closing: bool,
     active_turn: Option<String>,
     last_completed_turn: Option<String>,
     replayed_finalized: HashSet<String>,
@@ -110,6 +114,7 @@ impl Session {
             delivery: Mutex::new(()),
             data: Mutex::new(SessionData {
                 open: true,
+                closing: false,
                 active_turn: None,
                 last_completed_turn: None,
                 replayed_finalized: HashSet::new(),

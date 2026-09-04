@@ -150,6 +150,14 @@ impl Server {
             session.data.lock().await.active_turn.is_none(),
             "session still has foreground work"
         );
+        if was_registered {
+            // Codex deliberately ignores overrides when rejoining a subscribed thread.
+            // Detaching our sole connection lets its idle cache reload MCP/root settings.
+            self.backend
+                .request("thread/unsubscribe", json!({"threadId":id}))
+                .await?;
+            session.data.lock().await.open = false;
+        }
         let response = match self.backend.request("thread/resume", params).await {
             Ok(response) => response,
             Err(error) => {
@@ -162,6 +170,7 @@ impl Server {
         {
             let mut data = session.data.lock().await;
             data.open = true;
+            data.closing = false;
             data.configuration = Configuration::from_response(&response, models);
         }
         if request.replay_from.is_some()
@@ -240,10 +249,16 @@ impl Server {
         let _creation = self.creation_gate.lock().await;
         let source = self.session(&request.session_id.to_string()).await?;
         let _gate = source.gate.lock().await;
+        let source_data = source.data.lock().await;
         ensure!(
-            source.data.lock().await.active_turn.is_none(),
+            source_data.open && !source_data.closing,
+            "session is closed; resume it first"
+        );
+        ensure!(
+            source_data.active_turn.is_none(),
             "cannot fork while foreground work is active"
         );
+        drop(source_data);
         let state = self.state.lock().await;
         ensure!(
             state.sessions.len() < self.options.max_sessions,
@@ -295,7 +310,10 @@ impl Server {
         let negotiated = self.state.lock().await.extensions;
         let extras = config::turn_parameters(request.meta.as_ref(), negotiated)?;
         let data = session.data.lock().await;
-        ensure!(data.open, "session is closed; resume it first");
+        ensure!(
+            data.open && !data.closing,
+            "session is closed or closing; resume it first"
+        );
         let active = data.active_turn.clone();
         drop(data);
         if let Some(turn) = active {
@@ -332,6 +350,10 @@ impl Server {
     pub(super) async fn cancel(&self, id: &str, connection: &V2ConnectionTo<Client>) -> Result<()> {
         let session = self.session(id).await?;
         let _gate = session.gate.lock().await;
+        ensure!(
+            session.data.lock().await.open,
+            "session is closed; resume it first"
+        );
         self.cancel_locked(id, &session, connection).await
     }
 
@@ -373,7 +395,9 @@ impl Server {
     ) -> Result<v2::CloseSessionResponse> {
         let session = self.session(id).await?;
         let _gate = session.gate.lock().await;
+        session.data.lock().await.closing = true;
         self.cancel_locked(id, &session, connection).await?;
+        self.close_descendants(id).await?;
         self.backend
             .request("thread/backgroundTerminals/clean", json!({"threadId":id}))
             .await?;
@@ -421,7 +445,10 @@ impl Server {
         let session = self.session(&id).await?;
         let _gate = session.gate.lock().await;
         let data = session.data.lock().await;
-        ensure!(data.open, "session is closed; resume it first");
+        ensure!(
+            data.open && !data.closing,
+            "session is closed or closing; resume it first"
+        );
         let options = data.configuration.options();
         if let v2::SessionConfigOptionValue::Id { value } = &request.value
             && options.iter().any(|option| option.config_id == request.config_id
