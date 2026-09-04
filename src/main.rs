@@ -2,7 +2,7 @@ use std::{ffi::OsString, path::PathBuf, time::Duration};
 
 use clap::Parser;
 use codex_acp_v2::{
-    backend::BackendOptions,
+    backend::{BackendExecutable, BackendOptions},
     server::{ServerOptions, run},
 };
 use tracing_subscriber::prelude::*;
@@ -13,9 +13,14 @@ use tracing_subscriber::prelude::*;
     about = "ACP protocol v2 agent backed by a Codex app-server child"
 )]
 struct Arguments {
-    #[arg(long, env = "CODEX_PATH", default_value = "codex")]
-    codex_path: PathBuf,
-    /// Argument passed to Codex before `app-server --stdio`; repeat as needed.
+    /// Override the bundled backend with a full Codex CLI executable.
+    #[arg(long, env = "CODEX_PATH", conflicts_with = "app_server_path")]
+    codex_path: Option<PathBuf>,
+    /// Override the bundled backend with a standalone Codex app-server executable.
+    #[arg(long, env = "CODEX_APP_SERVER_PATH", conflicts_with = "codex_path")]
+    app_server_path: Option<PathBuf>,
+    /// Backend argument; repeat as needed. Precedes standalone `--listen stdio://`
+    /// or, with --codex-path, the full CLI's `app-server --stdio` subcommand.
     #[arg(long, allow_hyphen_values = true)]
     codex_arg: Vec<OsString>,
     /// Additional validated app-server initialize capabilities as a JSON object.
@@ -60,7 +65,11 @@ async fn main() -> anyhow::Result<()> {
     );
     run(ServerOptions {
         backend: BackendOptions {
-            executable: args.codex_path,
+            executable: args
+                .codex_path
+                .map(BackendExecutable::CodexCli)
+                .or_else(|| args.app_server_path.map(BackendExecutable::AppServer))
+                .unwrap_or(BackendExecutable::Bundled),
             args: args.codex_arg,
             request_timeout: Duration::from_secs(args.request_timeout_seconds),
             max_frame_bytes: args.max_frame_bytes,
