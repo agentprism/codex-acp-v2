@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.2.0
+
+- Bundle the complete pinned Codex app-server 0.153.3 runtime on all four release
+  targets, including code-mode host, ripgrep, and platform sandbox/shell helpers.
+- Distribute one native self-extracting executable per platform, not installation
+  archives. Extract the embedded runtime into a private, content-hash-keyed cache
+  without network downloads; verify cached files before reuse and fail closed on
+  corruption rather than falling back to a different Codex on PATH.
+- Add `--extract-runtime` for inspecting packaged notices/source metadata and
+  `CODEX_ACP_CACHE_DIR` for selecting a private extraction cache.
+- Preserve explicit full-CLI overrides through `--codex-path` / `CODEX_PATH`,
+  and add standalone overrides through `--app-server-path` /
+  `CODEX_APP_SERVER_PATH`. Plain Cargo builds still require an explicit backend
+  or an assembled package.
+- Include upstream notices, source material, and rebuild/relink inputs; verify
+  bundled startup and execution with isolated, credential-free model fixtures.
+
+Model authentication/configuration and platform runtime requirements still
+apply. The bundled app-server is not the interactive Codex CLI. Linux packages
+retain upstream zsh's glibc 2.38 and libtinfo 6 requirements despite the adapter's
+static musl target.
+
 ## 0.1.1
 
 First published binary release of the Rust ACP protocol v2 adapter for Codex

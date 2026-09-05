@@ -17,66 +17,110 @@ requires an ACP **v2** client; clients supporting only ACP v1 cannot connect.
 
 ## Install a release
 
-Download an archive for your machine from
-[GitHub Releases](https://github.com/agentprism/codex-acp-v2/releases). Archives
-contain the executable, documentation, dependency notices, and build metadata.
-Codex is **not bundled**: install and configure a compatible Codex executable
-separately before launching the adapter.
+Download the **native executable** for your machine from
+[GitHub Releases](https://github.com/agentprism/codex-acp-v2/releases). Each is one
+self-extracting binary containing the adapter, complete pinned **Codex app-server
+0.153.3** runtime, helpers, notices, and build metadata. There is no install tarball
+to unpack and no backend download at startup. You do not need a separate Codex,
+Node.js, or Rust installation. Model access still requires your own configured
+provider/account.
 
-| Platform | Release target | Archive |
+| Platform | Release target | Download |
 | --- | --- | --- |
-| macOS, Apple Silicon only | `aarch64-apple-darwin` | `.tar.gz` |
-| Linux, x86-64 | `x86_64-unknown-linux-musl` | `.tar.gz` |
-| Linux, ARM64 | `aarch64-unknown-linux-musl` | `.tar.gz` |
-| Windows, x86-64 | `x86_64-pc-windows-msvc` | `.zip` |
+| macOS, Apple Silicon only | `aarch64-apple-darwin` | Native executable, no extension |
+| Linux, x86-64 | `x86_64-unknown-linux-musl` | Native executable, no extension |
+| Linux, ARM64 | `aarch64-unknown-linux-musl` | Native executable, no extension |
+| Windows, x86-64 | `x86_64-pc-windows-msvc` | Native `.exe` |
 
-Linux adapter binaries use static musl linking, and Windows binaries statically
-link the MSVC runtime. The separately installed Codex executable has its own
-system requirements. Intel macOS and native Windows ARM64
-releases are not provided. macOS releases are not Developer ID signed or
-notarized, and Windows releases are not Authenticode signed. Operating-system
-security prompts may therefore apply; verify provenance before execution, and
-do not disable system-wide security checks.
+Linux adapter binaries use static musl linking, and Windows adapter binaries
+statically link the MSVC runtime. The bundled upstream helpers have their own
+system-library requirements; a `musl` target name does not mean every bundled
+helper runs on a musl-only distribution. In particular, the packaged patched zsh
+requires glibc 2.38 or newer and `libtinfo.so.6` on both Linux architectures;
+the ARM64 `rg` also uses glibc and `libgcc_s.so.1`. Use a glibc distribution with
+these libraries to use the complete runtime. Host sandbox facilities, shells,
+Git, and toolchains used by your projects are still operating-system prerequisites.
+Intel macOS and native Windows ARM64 releases are not provided. Our macOS
+adapter executable is not Developer ID
+signed or notarized, and our Windows adapter is not Authenticode signed. Bundled
+upstream executables are unchanged and retain any upstream signatures.
+Operating-system security prompts may therefore apply; verify provenance before
+execution, and do not disable system-wide security checks.
 
 For example, with the [GitHub CLI](https://cli.github.com/), download and verify
-the Apple Silicon archive before extracting it:
+the Apple Silicon executable:
 
 ```sh
-gh release download v0.1.1 --repo agentprism/codex-acp-v2 \
-  --pattern codex-acp-v2-v0.1.1-aarch64-apple-darwin.tar.gz \
+gh release download v0.2.0 --repo agentprism/codex-acp-v2 \
+  --pattern codex-acp-v2-v0.2.0-aarch64-apple-darwin \
   --pattern SHA256SUMS
-gh attestation verify codex-acp-v2-v0.1.1-aarch64-apple-darwin.tar.gz \
+gh attestation verify codex-acp-v2-v0.2.0-aarch64-apple-darwin \
   --repo agentprism/codex-acp-v2
-shasum -a 256 codex-acp-v2-v0.1.1-aarch64-apple-darwin.tar.gz
+shasum -a 256 codex-acp-v2-v0.2.0-aarch64-apple-darwin
 ```
 
-Compare the printed digest with that archive's entry in `SHA256SUMS`. On Linux
-use `sha256sum`; on Windows use PowerShell's `Get-FileHash -Algorithm SHA256` and
-`Expand-Archive`. Checksums detect changed bytes; the separate
+Compare the printed digest with that executable's entry in `SHA256SUMS`. On Linux
+use `sha256sum`; on Windows use PowerShell's `Get-FileHash -Algorithm SHA256`.
+Checksums detect changed bytes; the separate
 [GitHub attestation verification](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations)
 checks the artifact's recorded GitHub build provenance. An attestation is not an
 OS signature or proof that the software is free of vulnerabilities.
 
-After both verification steps succeed, extract the archive:
+After both checks succeed, make the Unix download executable:
 
 ```sh
-tar -xzf codex-acp-v2-v0.1.1-aarch64-apple-darwin.tar.gz
+chmod +x codex-acp-v2-v0.2.0-aarch64-apple-darwin
+./codex-acp-v2-v0.2.0-aarch64-apple-darwin --help
 ```
 
-Put the extracted `codex-acp-v2` binary (`codex-acp-v2.exe` on Windows) on PATH,
-or give its absolute path to your ACP client. On Windows, use a native
-`codex.exe` on PATH or pass `--codex-path 'C:\path\to\codex.exe'`. An npm
-installation's bare `codex.cmd` shim is not found by the adapter's default
-`codex` executable lookup; prefer the native executable bundled by Codex instead
-of adding a shell wrapper. Release automation and maintainer steps are described
-in [CONTRIBUTING.md](CONTRIBUTING.md#releases).
+Give your ACP client the absolute path to the downloaded executable. You can
+rename it to `codex-acp-v2` (`codex-acp-v2.exe` on Windows) and put it on PATH.
+The single executable can be moved or copied without a sidecar directory.
+Windows downloads run directly; there is no archive-extraction step.
+
+On first use the adapter extracts its embedded runtime into a private per-user
+cache. Installation uses a temporary staging directory and atomic rename; cache
+directories are keyed by the embedded payload's SHA-256. Each launch validates
+cached file sizes, hashes, and executable modes where supported and rejects
+symlinks, Windows reparse points, or unsafe paths. Unix caches enforce private
+permissions; Windows uses the user cache directory's inherited ACLs. Nothing is
+downloaded. Linux retains bubblewrap and Codex's patched zsh;
+Windows retains the command-runner and sandbox-setup helpers.
+
+Default cache roots are `$XDG_CACHE_HOME/codex-acp-v2` (or
+`$HOME/.cache/codex-acp-v2`) on Linux, `$HOME/Library/Caches/codex-acp-v2` on macOS,
+and `%LOCALAPPDATA%\codex-acp-v2` on Windows. Set `CODEX_ACP_CACHE_DIR` to an
+absolute path to select another private cache. This is separate from the Codex
+account/profile directory controlled by `CODEX_HOME`.
+
+To extract/verify the runtime and print its directory without starting ACP:
+
+```sh
+codex-acp-v2 --extract-runtime
+```
+
+That directory includes `licenses/`, build metadata, and the canonical
+`codex/bin/`, `codex/codex-path/`, and `codex/codex-resources/` package. `--help`
+and `--version` do not extract it. A corrupt cache fails explicitly rather than
+switching to a Codex on PATH or silently deleting files. Stop affected adapter
+processes, remove only the exact cache directory named in the error, and retry
+to recreate it from the verified executable. Keep notices and corresponding
+sources when redistributing. Release automation and maintainer steps are in
+[CONTRIBUTING.md](CONTRIBUTING.md#releases).
 
 ## Build and run
 
-Install Rust using rustup, and install a Codex executable compatible with the
-app-server protocol referenced by this project. Authenticate/configure Codex
-separately, for example with `codex login`. The adapter uses that executable's
-normal account, configuration, and execution environment.
+Install Rust using rustup. A plain Cargo build produces the adapter only; use an
+explicit compatible backend while developing, or assemble the complete release
+executable using the release tooling and `bundled-backend` feature. Source builds
+without that feature can also use the canonical sibling `codex/` layout.
+Existing Codex configuration and authentication are reused through Codex's normal
+profile (`CODEX_HOME` can select a separate
+profile). The bundled app-server is not the interactive Codex CLI and does not
+provide a `login` subcommand. A configured ACP client may use the negotiated
+account/login extensions with operator-granted host authority; alternatively,
+an existing Codex CLI can authenticate the same profile with `codex login`.
+Configuring another provider follows Codex's own provider requirements.
 
 ```sh
 cargo build --release --locked
@@ -90,11 +134,18 @@ process owns one app-server process and can host multiple threads. Native
 MCP-over-ACP declarations additionally create private, token-protected loopback
 HTTP listeners for Codex's MCP transport; these do not expose the ACP server.
 
-`--codex-path` defaults to `codex` and can also be supplied through `CODEX_PATH`.
-Repeat `--codex-arg` for arguments that precede `app-server --stdio`:
+The default is the bundled standalone app-server. Explicit alternatives are
+`--codex-path` / `CODEX_PATH` for a **full Codex CLI**, or
+`--app-server-path` / `CODEX_APP_SERVER_PATH` for a **standalone app-server**.
+The two overrides are mutually exclusive. On Windows, use native `.exe` paths,
+not npm's `codex.cmd` shim. Overrides are intended for development or deliberate
+backend management; their versions and dependencies are your responsibility.
+
+Repeat `--codex-arg` for backend options. They precede `--listen stdio://` for a
+standalone backend, or `app-server --stdio` when using a full CLI:
 
 ```sh
-./target/release/codex-acp-v2 \
+/path/to/codex-acp-v2 \
   --codex-arg=-c \
   --codex-arg='model="your-configured-model"'
 ```
@@ -104,14 +155,20 @@ Useful limits are `--max-sessions` (64), `--request-timeout-seconds` (60),
 Resource exhaustion is an explicit error, not silent loss of protocol events.
 Use `--help` for the authoritative CLI options.
 
-The reference backend is the Codex source at revision `89a4eec6da`. A real
-Codex `0.153.2` executable has also been exercised against a local mock Responses
-endpoint for initialization, model discovery, command/file approvals and execution,
-dynamic callbacks, stdio/native MCP calls, child execution, durable root/child
-replay, provider errors, and cancellation. These checks use no real account
-authentication or remote model inference. Features vary by backend version,
+The bundled backend is the unmodified upstream Codex `0.153.3` package from
+source revision `b1a547b1f73ce86205d9222ac19cff334b3b7a2e`. Its version, release
+URLs, sizes, and SHA-256 digests are pinned independently of the adapter version.
+The bundled-default path has been exercised with a real Codex `0.153.3`
+runtime and a local mock Responses endpoint for initialization, model discovery,
+command/file approvals and execution, dynamic callbacks, stdio/native MCP calls,
+child execution, durable root/child
+replay, provider errors, and cancellation. Earlier compatibility checks also
+used reference source `89a4eec6da` and a Codex `0.153.2` CLI. These checks use no
+real account authentication or remote model inference. Features vary by backend version,
 account, model, operating system, and feature flags: forwarding a supported
-method does not override Codex's own eligibility checks.
+method does not override Codex's own eligibility checks. See the
+[known bundled dependency advisories](SECURITY.md#bundled-backend-advisories)
+before deployment; the upstream runtime is not covered by the adapter's audit.
 
 ## Standard ACP surface
 
@@ -440,6 +497,17 @@ Codex runtime, tool execution, protocol transports, and stored rollouts are real
 Everything runs in a temporary workspace and Codex profile without machine
 credentials. This is not a live-model or model-quality test.
 
+To exercise a downloaded native release through the same deep Unix workflow,
+without an installed Codex or backend override:
+
+```sh
+python3 tests/fixtures/installed_workflow.py /absolute/path/to/downloaded-executable
+```
+
+The fixture uses a fresh runtime cache and rejects accidental Codex PATH fallback.
+Release CI additionally runs a cross-platform default-launch smoke test on each
+native target, including Windows.
+
 ### Six-part acceptance contract
 
 | Original requirement | Implemented contract and capability boundary | Executable verification |
@@ -473,6 +541,7 @@ for private vulnerability reporting and trust boundaries.
 ## License
 
 Licensed under the [Apache License, Version 2.0](LICENSE). Third-party
-dependencies retain their respective licenses. Release archives include their
-license and attribution notices; see [licenses/README.md](licenses/README.md)
+dependencies retain their respective licenses. Release executables embed their
+license and attribution notices; inspect them with `--extract-runtime` and see
+[licenses/README.md](licenses/README.md)
 for how those records are generated and maintained.
