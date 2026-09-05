@@ -27,7 +27,7 @@ packaging verifies the inventory instead of silently omitting missing notices.
 
 `../MUSL-COPYRIGHT.txt` supplies musl's original copyright and license inventory
 for statically linked Linux components. Host-provided shared libraries are not
-included in these archives. In particular, packaged zsh uses glibc and libtinfo
+included in these runtime payloads. In particular, packaged zsh uses glibc and libtinfo
 on Linux; the ARM64 ripgrep also uses host glibc and libgcc_s.
 
 Rusty V8's root source is `denoland/rusty_v8` at
@@ -62,6 +62,8 @@ Additional notice source references:
 Every embedded runtime carries `codex/SOURCE.tar.gz`, the exact upstream source
 archive, SHA-256
 `bdd4df80f52e9e831eec6fd892fc5c99cc04dc1214b545c2a2843edc9e43dbbe`.
+Run the downloaded adapter with `--extract-runtime` to print the runtime directory
+and inspect its notices and source archive without launching ACP or Codex.
 The same GitHub release also provides **`codex-backend-sources-0.153.3.zip`**:
 
 <https://github.com/agentprism/codex-acp-v2/releases>
@@ -118,8 +120,12 @@ PKG_CONFIG_PATH=/absolute/pkgconfig-directory PKG_CONFIG_ALL_STATIC=1 \
 
 The C source and headers are in `upstream/codex-rs/vendor/bubblewrap/`; the Rust
 wrapper, build script, and manifest are in `upstream/codex-rs/bwrap/`.
-You can modify and rebuild them and replace `codex/codex-resources/bwrap` in a
-copy of the extracted binary package. Upstream's exact release-target compiler
+You can modify and rebuild them. Copy the complete extracted `codex/` directory
+to a separate development directory, replace its `codex-resources/bwrap`, then
+run the adapter with `--app-server-path /absolute/copy/bin/codex-app-server`.
+Do not edit the managed runtime cache: its integrity checks intentionally reject
+changed files. The explicit backend override bypasses that cache and supports
+your modified runtime. Upstream's exact release-target compiler
 and musl/libcap staging steps are in
 `upstream/.github/scripts/install-musl-build-tools.sh` and its release workflow.
 

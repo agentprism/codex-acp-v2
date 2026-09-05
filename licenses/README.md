@@ -1,9 +1,11 @@
 # Third-party release notices
 
-Release archives contain the project's LICENSE and these dependency records:
+Release executables embed the project's LICENSE and these dependency records.
+Run `codex-acp-v2 --extract-runtime` to inspect them without starting the agent:
 
 - `THIRD-PARTY-NOTICES.html` is generated from the locked Cargo dependency graph
-  by cargo-about 0.9.2 using the reviewed `about.toml` policy. It includes the
+  by cargo-about 0.9.2 with all features using the reviewed `about.toml` policy.
+  It includes the
   original harvested license text and attribution where available, including
   dependencies with conjunctive BSD and Unicode terms.
 - `RUST-STD-NOTICES.html` and `RUST-STD-LICENSES/` are copied from the exact
@@ -19,5 +21,13 @@ Release archives contain the project's LICENSE and these dependency records:
 
 When changing the compiler, targets, or dependency graph, regenerate the Cargo
 notices and review whether these non-Cargo notices also need an update. Preserve
-the notice files when redistributing release archives. Codex is launched as a
-separate executable and is not redistributed in this project's archives.
+the embedded notice files when redistributing release executables.
+
+Releases from 0.2.0 also redistribute the complete upstream Codex app-server
+package. Its independent license inventory and source/rebuild information are
+under [CODEX/README.md](CODEX/README.md). Those notices cover Codex, its Rust
+dependencies, V8 and native components, ripgrep, and platform helpers; they are
+not generated from the adapter's Cargo.lock and do not change the adapter's
+Apache-2.0 license. Preserve access to the corresponding-source asset published
+alongside the native executables when redistributing them. That separate
+corresponding-source ZIP is not an installation package.
