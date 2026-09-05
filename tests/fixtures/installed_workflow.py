@@ -161,6 +161,8 @@ class Client:
         self.frames = queue.Queue()
         environment = os.environ.copy()
         environment["CODEX_HOME"] = str(directory / "profile")
+        self.runtime_cache = directory / "runtime-cache"
+        environment["CODEX_ACP_CACHE_DIR"] = str(self.runtime_cache)
         environment.pop("OPENAI_API_KEY", None)
         environment.pop("CODEX_API_KEY", None)
         environment.pop("CODEX_PATH", None)
@@ -186,6 +188,9 @@ class Client:
         self.process = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=None, encoding="utf-8", env=environment, cwd=directory, start_new_session=os.name != "nt")
         threading.Thread(target=self.reader, daemon=True).start()
         self.initialized = self.rpc("initialize", {"protocolVersion": 2, "info": {"name": "workflow-client", "version": "1"}, "capabilities": {"_meta": {"codex": {"version": 1, "events": [], "serverRequests": True}}}})
+        cached = list(self.runtime_cache.glob("*/codex/codex-package.json"))
+        assert len(cached) <= 1, cached
+        self.runtime_directory = cached[0].parent.parent if cached else Path(binary).parent
 
     def reader(self):
         try:
@@ -327,7 +332,7 @@ def workflow(binary, codex_path=None):
             outputs = {item["call_id"]: item["output"] for item in Model.parent_requests[-1]["input"] if item.get("type") == "function_call_output"}
             assert "command-ok" in outputs["exec-fixture"] and "A workflow.txt" in outputs["patch-fixture"], outputs
             if codex_path is None:
-                bundled_rg = str(Path(binary).resolve().parent / "codex" / "codex-path" / "rg")
+                bundled_rg = str(client.runtime_directory / "codex" / "codex-path" / "rg")
                 assert bundled_rg in outputs["exec-fixture"], outputs["exec-fixture"]
                 assert "ripgrep " in outputs["exec-fixture"], outputs["exec-fixture"]
             assert outputs["dynamic-ok"] == "dynamic-ok" and outputs["dynamic-error"] == "dynamic tool request failed", outputs

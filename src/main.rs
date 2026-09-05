@@ -19,6 +19,9 @@ struct Arguments {
     /// Override the bundled backend with a standalone Codex app-server executable.
     #[arg(long, env = "CODEX_APP_SERVER_PATH", conflicts_with = "codex_path")]
     app_server_path: Option<PathBuf>,
+    /// Install/verify the embedded runtime, print its directory, then exit (not ACP mode).
+    #[arg(long, conflicts_with_all = ["codex_path", "app_server_path"])]
+    extract_runtime: bool,
     /// Backend argument; repeat as needed. Precedes standalone `--listen stdio://`
     /// or, with --codex-path, the full CLI's `app-server --stdio` subcommand.
     #[arg(long, allow_hyphen_values = true)]
@@ -57,6 +60,11 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
     let args = Arguments::parse();
+    if args.extract_runtime {
+        let directory = blocking::unblock(codex_acp_v2::backend::extract_runtime).await?;
+        println!("{}", directory.display());
+        return Ok(());
+    }
     anyhow::ensure!(
         args.request_timeout_seconds > 0
             && args.interaction_timeout_seconds > 0

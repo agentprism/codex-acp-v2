@@ -12,7 +12,7 @@ fn bundled_lookup_is_installation_scoped_and_rejects_redirected_or_incomplete_pa
         resolve_bundled(&adapter)
             .unwrap_err()
             .to_string()
-            .contains("Extract the complete release archive")
+            .contains("complete native release download")
     );
     let directory = installation.path().join("codex");
     fs::create_dir(&directory).unwrap();

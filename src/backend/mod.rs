@@ -1,9 +1,13 @@
 //! Bounded, bidirectional JSON-lines transport to a Codex-owned child process.
 
+#[cfg(any(feature = "bundled-backend", test))]
+mod embedded;
 mod executable;
+#[cfg(any(feature = "bundled-backend", test))]
+mod runtime_cache;
 mod transport;
 
-pub use executable::BackendExecutable;
+pub use executable::{BackendExecutable, extract_runtime};
 
 use std::collections::HashMap;
 use std::ffi::OsString;
