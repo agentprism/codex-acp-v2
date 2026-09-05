@@ -16,14 +16,15 @@ class PublicationBoundaryTests(unittest.TestCase):
     def test_missing_or_extra_platform_prevents_checksum_publication(self):
         with tempfile.TemporaryDirectory() as temp:
             directory = Path(temp)
-            names = [release.archive_name("v0.1.0", target) for target in release.TARGETS]
+            names = [release.binary_name("v0.1.0", target) for target in release.TARGETS]
+            names.append(release.source_archive_name())
             for name in names[:-1]:
                 (directory / name).write_bytes(b"archive bytes")
             with self.assertRaisesRegex(ValueError, "missing="):
                 release.release_manifest("v0.1.0", directory)
             (directory / names[-1]).write_bytes(b"last archive")
             manifest = release.release_manifest("v0.1.0", directory)
-            self.assertEqual(len(manifest.splitlines()), 4)
+            self.assertEqual(len(manifest.splitlines()), 5)
             for line in manifest.splitlines():
                 digest, name = line.split("  ")
                 self.assertEqual(digest, hashlib.sha256((directory / name).read_bytes()).hexdigest())
@@ -59,14 +60,16 @@ class PublicationBoundaryTests(unittest.TestCase):
                 root = Path(temp)
                 (root / "Cargo.toml").write_text('[package]\nname="codex-acp-v2"\nversion="1.2.3"\n')
                 (root / "Cargo.lock").write_text('[[package]]\nname="codex-acp-v2"\nversion="1.2.3"\n')
+                (root / "backend.lock.json").write_bytes(Path("backend.lock.json").read_bytes())
                 directory = root / "dist"
                 directory.mkdir()
                 for target in release.TARGETS:
-                    (directory / release.archive_name("v1.2.3", target)).write_bytes(target.encode())
+                    (directory / release.binary_name("v1.2.3", target)).write_bytes(target.encode())
+                (directory / release.source_archive_name()).write_bytes(b"corresponding sources")
                 (directory / "SHA256SUMS").write_text(release.release_manifest("v1.2.3", directory))
                 draft = {"id": 42, "tag_name": "v1.2.3", "draft": True, "assets": []}
                 records = [draft] if resume_existing else []
-                existing_name = release.archive_name("v1.2.3", release.TARGETS[0])
+                existing_name = release.binary_name("v1.2.3", release.TARGETS[0])
                 if resume_existing:
                     existing = directory / existing_name
                     draft["assets"].append({"name": existing_name, "size": existing.stat().st_size,
