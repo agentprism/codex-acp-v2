@@ -60,8 +60,8 @@
     },
     {
       "path": "README.md",
-      "size": 11123,
-      "sha256": "6ca3a2bf8661b29f9bb59514cfb378e6f149011d6587fbf0edbdaeb267dec5c8"
+      "size": 12484,
+      "sha256": "0d7a3755b0e91cf5e47d37222010186a017c83a573579d6fdb1a302aed62f14b"
     },
     {
       "path": "RIPGREP-NOTICES.html",
@@ -270,8 +270,33 @@
     },
     {
       "path": "V8/SOURCES.json",
-      "size": 9969,
-      "sha256": "deeceec7d8bd1dea40dd49aef0b7c04a19b785d9b67eb19a63bd7f07aa0f29a0"
+      "size": 15872,
+      "sha256": "08b270734cac90db1d79224c455af0780913c12ae1b1a727087f97e00c9fff83"
+    },
+    {
+      "path": "V8/build/LICENSE",
+      "size": 1536,
+      "sha256": "368cca1106be99d39ecd32a38d8305585d802a475effb66380b91ffc9bcf709b"
+    },
+    {
+      "path": "V8/build/android/incremental_install/third_party/AndroidHiddenApiBypass/LICENSE",
+      "size": 11357,
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    },
+    {
+      "path": "V8/buildtools/LICENSE",
+      "size": 1537,
+      "sha256": "ff11d445fb41a1087c7630e120ab15f1a2cb67c1b707173cb494141805fca35e"
+    },
+    {
+      "path": "V8/buildtools/third_party/mold/LICENSE",
+      "size": 1067,
+      "sha256": "c98a2858469bd3b231c8865c5b65f80f6ffbf25e850d5d575967e3d9ee080755"
+    },
+    {
+      "path": "V8/third_party/abseil-cpp/AUTHORS",
+      "size": 295,
+      "sha256": "1fd39030c119b4c97014f59e0ad0ed65f23475bbdf55a52740f31eb82b34b4ee"
     },
     {
       "path": "V8/third_party/abseil-cpp/LICENSE",
@@ -287,6 +312,11 @@
       "path": "V8/third_party/dragonbox/src/LICENSE-Boost",
       "size": 1338,
       "sha256": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566"
+    },
+    {
+      "path": "V8/third_party/fast_float/src/AUTHORS",
+      "size": 36,
+      "sha256": "ed249424bce4e318fa190dd6d8becf60cfc37287132ad3f89e16e0f28d878dcf"
     },
     {
       "path": "V8/third_party/fast_float/src/LICENSE-APACHE",
@@ -314,9 +344,29 @@
       "sha256": "e340270d4f64384569a91d546acb5b094d69ce47f0c015db77abb74dc6f815af"
     },
     {
+      "path": "V8/third_party/highway/src/debian/copyright",
+      "size": 825,
+      "sha256": "6e4ecf1cae052b678ea3178dd4b3652d581ee66a82d58db8800dd7d80dd6de76"
+    },
+    {
       "path": "V8/third_party/icu/LICENSE",
       "size": 26487,
       "sha256": "451167c55c0fa447cc2d5632714f5e3c567fe4f1e1badefab2c1333852198aca"
+    },
+    {
+      "path": "V8/third_party/icu/license.html",
+      "size": 622,
+      "sha256": "c62d7697c03979f5056d28b338fafc7a1152820f7b379adf4a9d88cd37160f96"
+    },
+    {
+      "path": "V8/third_party/icu/scripts/LICENSE",
+      "size": 1559,
+      "sha256": "845022e0c1db1abb41a6ba4cd3c4b674ec290f3359d9d3c78ae558d4c0ed9308"
+    },
+    {
+      "path": "V8/third_party/jinja2/LICENSE.rst",
+      "size": 1475,
+      "sha256": "3b49dcee4105eb37bac10faf1be260408fe85d252b8e9df2e0979fc1e094437b"
     },
     {
       "path": "V8/third_party/libc++/src/LICENSE.TXT",
@@ -339,7 +389,32 @@
       "sha256": "ebcd9bbf783a73d05c53ba4d586b8d5813dcdf3bbec50265860ccc885e606f47"
     },
     {
+      "path": "V8/third_party/markupsafe/AUTHORS",
+      "size": 248,
+      "sha256": "bca90e12c0bf6998d25eb74bc0aa76f1f781493ff81a8a71ad6fb0d692248c45"
+    },
+    {
+      "path": "V8/third_party/markupsafe/LICENSE",
+      "size": 1582,
+      "sha256": "0bbe88228fd63d20ec097f64e58d5a0a465123ae139140a18d406c60b48824b5"
+    },
+    {
       "path": "V8/third_party/partition_alloc/LICENSE",
+      "size": 1536,
+      "sha256": "368cca1106be99d39ecd32a38d8305585d802a475effb66380b91ffc9bcf709b"
+    },
+    {
+      "path": "V8/third_party/partition_alloc/src/partition_alloc/third_party/apple_apsl/LICENSE",
+      "size": 20089,
+      "sha256": "b23e682fda7310afe43505ed6041919ccff8f9e0c6799ebd7542cbcef11102e3"
+    },
+    {
+      "path": "V8/third_party/partition_alloc/src/partition_alloc/third_party/apple_apsl/README.chromium",
+      "size": 1548,
+      "sha256": "ee82868a98861e747f798df807e400f02318d019e0afaaf165d465a6526be83b"
+    },
+    {
+      "path": "V8/third_party/rust/LICENSE",
       "size": 1536,
       "sha256": "368cca1106be99d39ecd32a38d8305585d802a475effb66380b91ffc9bcf709b"
     },
@@ -347,6 +422,21 @@
       "path": "V8/third_party/simdutf/LICENSE",
       "size": 1059,
       "sha256": "fc8dbc04e03ad4efc08a647ffe7f995b811a95bc04c0e85a56d5277c6593fa5f"
+    },
+    {
+      "path": "V8/tools/clang/LICENSE",
+      "size": 1536,
+      "sha256": "368cca1106be99d39ecd32a38d8305585d802a475effb66380b91ffc9bcf709b"
+    },
+    {
+      "path": "V8/tools/win/LICENSE",
+      "size": 1536,
+      "sha256": "368cca1106be99d39ecd32a38d8305585d802a475effb66380b91ffc9bcf709b"
+    },
+    {
+      "path": "V8/v8/AUTHORS",
+      "size": 13546,
+      "sha256": "fa60d5a34dff8985ccee2bbd9702cac4ce8712e1c0d7521ce00879403b0fcc27"
     },
     {
       "path": "V8/v8/LICENSE",
