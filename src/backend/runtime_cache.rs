@@ -15,8 +15,11 @@ pub(super) fn default_root() -> anyhow::Result<PathBuf> {
     } else if cfg!(target_os = "macos") {
         PathBuf::from(std::env::var_os("HOME").context("HOME is not set")?)
             .join("Library/Caches/codex-acp-v2")
-    } else if let Some(directory) = std::env::var_os("XDG_CACHE_HOME") {
-        PathBuf::from(directory).join("codex-acp-v2")
+    } else if let Some(directory) = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+    {
+        directory.join("codex-acp-v2")
     } else {
         PathBuf::from(std::env::var_os("HOME").context("HOME is not set")?)
             .join(".cache/codex-acp-v2")
