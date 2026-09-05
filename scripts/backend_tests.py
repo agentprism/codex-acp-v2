@@ -13,6 +13,25 @@ import backend
 
 
 class BackendPackageTests(unittest.TestCase):
+    def test_redistribution_notices_cannot_be_removed_or_changed_after_review(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            notice = root / "LICENSE"
+            notice.write_bytes(b"reviewed license text")
+            lock = {"version": "0.153.3", "commit": "reviewed-source"}
+            manifest = {"schemaVersion": 1, "backendVersion": lock["version"],
+                        "backendCommit": lock["commit"], "files": [
+                            {"path": "LICENSE", "size": notice.stat().st_size,
+                             "sha256": hashlib.sha256(notice.read_bytes()).hexdigest()}]}
+            (root / "MANIFEST.json").write_text(json.dumps(manifest), encoding="utf-8")
+            backend.verify_notices(lock, root)
+            notice.write_bytes(b"incomplete license")
+            with self.assertRaisesRegex(ValueError, "pinned size and SHA-256"):
+                backend.verify_notices(lock, root)
+            notice.unlink()
+            with self.assertRaisesRegex(ValueError, "missing or unexpected"):
+                backend.verify_notices(lock, root)
+
     def fixture(self, root, extra=None):
         target = "x86_64-unknown-linux-musl"
         archive = root / "backend.tar.gz"

@@ -176,6 +176,8 @@ def bundle_files(directory, lock, target):
             paths[path.relative_to(directory).as_posix()] = path
     if set(paths) != expected:
         raise ValueError("bundled backend has missing or unexpected package files")
+    if paths["codex-package.json"].stat().st_size > 4096:
+        raise ValueError("bundled backend metadata exceeds its size limit")
     if json.loads(paths["codex-package.json"].read_text(encoding="utf-8")) != metadata(lock, target):
         raise ValueError("bundled backend metadata disagrees with its lockfile")
     verify_archive(paths["SOURCE.tar.gz"], lock["source"])
@@ -197,6 +199,35 @@ def verified_files(directory, archive_path, lock, target):
             if os.name != "nt" and member.mode & 0o111 and not path.stat().st_mode & 0o111:
                 raise ValueError(f"staged backend helper lost its executable mode: {member.name}")
     return paths
+
+
+def verify_notices(lock, directory=Path("licenses/CODEX")):
+    manifest_path = directory / "MANIFEST.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if (manifest.get("schemaVersion") != 1 or manifest.get("backendVersion") != lock["version"]
+            or manifest.get("backendCommit") != lock["commit"]):
+        raise ValueError("backend notice inventory does not match the pinned source")
+    expected = {}
+    for entry in manifest["files"]:
+        name = entry["path"]
+        path = PurePosixPath(name)
+        if (not name or path.is_absolute() or name != path.as_posix() or ".." in path.parts
+                or "\\" in name or ":" in name or name in expected or name == "MANIFEST.json"):
+            raise ValueError("backend notice inventory contains an unsafe or duplicate path")
+        if not re.fullmatch(r"[0-9a-f]{64}", entry["sha256"]) or type(entry["size"]) is not int or entry["size"] <= 0:
+            raise ValueError("backend notice inventory requires nonempty digest-pinned files")
+        expected[name] = entry
+    actual = {}
+    for path in directory.rglob("*"):
+        if path.is_symlink() or not (path.is_file() or path.is_dir()):
+            raise ValueError("backend notices contain a link or special file")
+        if path.is_file() and path != manifest_path:
+            actual[path.relative_to(directory).as_posix()] = path
+    if not expected or actual.keys() != expected.keys():
+        raise ValueError("backend notice inventory has missing or unexpected files")
+    for name, path in actual.items():
+        verify_archive(path, expected[name])
+    return actual
 
 
 def stage(lock, target, archive_path, source_path, destination):
