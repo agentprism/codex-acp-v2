@@ -15,6 +15,7 @@ import zipfile
 
 import archives
 import backend
+import backend_audit
 
 
 def normalize_local_versions(text, version):
@@ -142,6 +143,7 @@ def assemble(args):
         subprocess.run(["cargo", "metadata", "--offline", "--locked", "--format-version", "1"],
                        cwd=workspace, env=environment, check=True, timeout=120,
                        stdout=subprocess.DEVNULL)
+        backend_audit.report(workspace, environment, Path("target/backend-audit-report.json"))
         rebuild_bwrap(upstream, libcap, scratch, environment)
         info = {"backend": lock, "localLockNormalization": "Only workspace versions 0.0.0 to release version",
                 "offlineRebuildVerified": "codex-bwrap with pinned libcap; native Linux, not bit-identical",
