@@ -1,4 +1,4 @@
-"""Report RustSec findings in the pinned backend's shipped normal/build dependency graph."""
+"""Report RustSec findings for the selected pinned Codex workspace executables."""
 
 import json
 from pathlib import Path
@@ -51,7 +51,7 @@ def report(workspace, environment, destination):
     report = {
         "schemaVersion": 1, "backend": backend.read_lock(),
         "policy": "Report only for unmodified upstream binaries; strict adapter audit remains a separate required gate.",
-        "scope": "Normal/build closure for shipped Rust executables across the four targets; not all workspace/dev crates. Non-Rust helper advisories require separate upstream review.",
+        "scope": "Normal/build closure for codex-app-server, codex-code-mode-host, Linux codex-bwrap, and codex-windows-sandbox across the four targets. This excludes workspace/dev-only crates, separately built ripgrep, and non-Rust helpers; those require separate upstream advisory review.",
         "productionPackageCounts": {target: len(packages) for target, packages in targets.items()},
         "productionPackages": targets, "database": result.get("database"),
         "vulnerabilities": findings, "warnings": {kind: entries for kind, entries in warnings.items() if entries},
