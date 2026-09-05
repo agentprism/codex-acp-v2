@@ -101,10 +101,27 @@ impl Server {
             .backend
             .request("thread/read", json!({"threadId":id,"includeTurns":false}))
             .await?;
-        ensure!(
-            read["thread"]["cwd"] == serde_json::to_value(&request.cwd)?,
-            "resume cwd must match the stored session cwd"
-        );
+        let stored_cwd: v2::AbsolutePath = serde_json::from_value(read["thread"]["cwd"].clone())
+            .context("thread/read response missing cwd")?;
+        let same_cwd = if stored_cwd == request.cwd {
+            true
+        } else {
+            let requested_cwd = request.cwd.clone();
+            // Codex canonicalizes paths, including macOS /var symlinks and
+            // Windows short names. Compare local aliases without treating two
+            // failed resolutions as a match or blocking protocol dispatch.
+            blocking::unblock(move || {
+                matches!(
+                    (
+                        std::fs::canonicalize(stored_cwd),
+                        std::fs::canonicalize(requested_cwd)
+                    ),
+                    (Ok(stored), Ok(requested)) if stored == requested
+                )
+            })
+            .await
+        };
+        ensure!(same_cwd, "resume cwd must match the stored session cwd");
         ensure!(
             read["thread"]
                 .pointer("/status/type")
