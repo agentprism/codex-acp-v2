@@ -10,8 +10,9 @@ use super::BackendError;
 
 /// Selects a packaged standalone backend or an explicit executable override.
 ///
-/// Bundled lookup is anchored to the adapter executable, never its working
-/// directory or PATH. The other variants identify the executable's CLI contract;
+/// Released binaries materialize their embedded runtime in a verified user cache.
+/// Source builds look beside the adapter, never in its working directory or PATH.
+/// The other variants identify the executable's CLI contract;
 /// no mode is inferred from its filename.
 #[derive(Clone, Debug, Default)]
 pub enum BackendExecutable {
@@ -30,10 +31,17 @@ impl BackendExecutable {
     ) -> Result<(PathBuf, Command), BackendError> {
         let executable = match self {
             Self::Bundled => {
-                let adapter = std::env::current_exe()
-                    .and_then(fs::canonicalize)
-                    .map_err(|error| bundle_error(format!("cannot locate adapter: {error}")))?;
-                resolve_bundled(&adapter)?
+                #[cfg(feature = "bundled-backend")]
+                {
+                    validate_package(&extract_runtime()?.join("codex"))?
+                }
+                #[cfg(not(feature = "bundled-backend"))]
+                {
+                    let adapter = std::env::current_exe()
+                        .and_then(fs::canonicalize)
+                        .map_err(|error| bundle_error(format!("cannot locate adapter: {error}")))?;
+                    resolve_bundled(&adapter)?
+                }
             }
             Self::CodexCli(path) | Self::AppServer(path) => path.clone(),
         };
@@ -44,6 +52,30 @@ impl BackendExecutable {
             Self::Bundled | Self::AppServer(_) => command.args(["--listen", "stdio://"]),
         };
         Ok((executable, command))
+    }
+}
+
+/// Install and verify the embedded runtime, returning its directory for inspection.
+///
+/// This performs no network requests and produces no protocol or diagnostic output.
+/// It is unavailable in source builds without the `bundled-backend` feature.
+pub fn extract_runtime() -> Result<PathBuf, BackendError> {
+    #[cfg(feature = "bundled-backend")]
+    {
+        let root = super::runtime_cache::default_root()
+            .map_err(|error| bundle_error(format!("runtime cache: {error:#}")))?;
+        let directory = super::embedded::install(
+            include_bytes!(env!("CODEX_ACP_BUNDLE_PATH")),
+            env!("CODEX_ACP_BUNDLE_SHA256"),
+            &root,
+        )
+        .map_err(|error| bundle_error(format!("runtime extraction: {error:#}")))?;
+        validate_package(&directory.join("codex"))?;
+        Ok(directory)
+    }
+    #[cfg(not(feature = "bundled-backend"))]
+    {
+        Err(bundle_error("this source build has no embedded runtime"))
     }
 }
 
@@ -58,11 +90,16 @@ struct PackageManifest {
     path_dir: String,
 }
 
+#[cfg(any(not(feature = "bundled-backend"), test))]
 fn resolve_bundled(adapter: &Path) -> Result<PathBuf, BackendError> {
     let directory = adapter
         .parent()
         .ok_or_else(|| bundle_error("adapter has no parent directory"))?
         .join("codex");
+    validate_package(&directory)
+}
+
+fn validate_package(directory: &Path) -> Result<PathBuf, BackendError> {
     let manifest_path = directory.join("codex-package.json");
     let mut bytes = Vec::new();
     fs::File::open(&manifest_path)
@@ -155,7 +192,7 @@ fn resolve_bundled(adapter: &Path) -> Result<PathBuf, BackendError> {
 
 fn bundle_error(message: impl std::fmt::Display) -> BackendError {
     BackendError::Configuration(format!(
-        "bundled Codex backend unavailable or invalid: {message}. Extract the complete release archive and keep its codex directory beside the adapter; source builds can explicitly use --codex-path codex or --app-server-path PATH"
+        "bundled Codex backend unavailable or invalid: {message}. Use a complete native release download; source builds can explicitly use --codex-path codex or --app-server-path PATH, or keep a complete codex directory beside the adapter"
     ))
 }
 

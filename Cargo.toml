@@ -13,6 +13,9 @@ categories = ["command-line-utilities", "development-tools"]
 # Releases are GitHub binaries; crates.io publication is intentionally separate.
 publish = false
 
+[features]
+bundled-backend = []
+
 [dependencies]
 agent-client-protocol = { version = "=2.1.0", features = ["unstable_protocol_v2", "unstable_session_fork", "unstable_mcp_over_acp"] }
 anyhow = "1"
@@ -23,15 +26,18 @@ clap = { version = "4", features = ["derive", "env"] }
 futures = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
+sha2 = "0.11"
+tempfile = "3"
 thiserror = "2"
 time = { version = "0.3", features = ["formatting"] }
 tokio = { version = "1", features = ["io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4"] }
+zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
-[dev-dependencies]
-tempfile = "3"
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["process"] }
 
 [lints.rust]
 unsafe_code = "forbid"

@@ -1,3 +1,5 @@
+#![cfg(not(feature = "bundled-backend"))]
+
 use std::{process::Stdio, time::Duration};
 
 use tokio::process::Command;

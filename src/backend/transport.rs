@@ -22,7 +22,9 @@ pub(super) async fn spawn(
         .as_object_mut()
         .ok_or_else(|| BackendError::Configuration("capabilities must be an object".into()))?;
     capabilities.insert("experimentalApi".into(), Value::Bool(true));
-    let (executable, mut command) = options.executable.command(&options.args)?;
+    let selected = options.executable.clone();
+    let arguments = options.args.clone();
+    let (executable, mut command) = blocking::unblock(move || selected.command(&arguments)).await?;
     let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
