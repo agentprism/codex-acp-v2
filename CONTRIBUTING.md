@@ -116,6 +116,10 @@ source material, not an install package. The small upstream Codex source archive
 is also embedded in each native executable's runtime payload.
 Do not publish a binary without its matching source material. See
 [the backend notices](licenses/CODEX/README.md) for scope and rebuild steps.
+Retain the public matching source asset while distributing its binaries. In
+particular, preserve source access for the covered Apple APSL components for
+at least twelve months after their initial distribution, or for the duration
+of their distribution if longer; do not discard old source assets during cleanup.
 
 OS code signing and notarization require separate publisher identities and
 credentials; the current workflow does not claim to perform either for the

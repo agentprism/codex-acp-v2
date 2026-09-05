@@ -5,6 +5,17 @@ packages from `openai/codex`, tag `rust-v0.153.3`, source commit
 `b1a547b1f73ce86205d9222ac19cff334b3b7a2e`. The adapter's Apache-2.0 license does
 not replace the licenses of these separately distributed components.
 
+Portions of the bundled V8/PartitionAlloc runtime contain Apple-covered code
+under **APSL-2.0**. Its source is available under that license in the matching
+`codex-backend-sources-0.153.3.zip` at
+<https://github.com/agentprism/codex-acp-v2/releases>, under
+`upstream/codex-rs/vendor-crates/v8-150.4.0/third_party/partition_alloc/src/partition_alloc/third_party/apple_apsl/`.
+The full license and upstream modification/origin record are preserved here in
+`V8/third_party/partition_alloc/src/partition_alloc/third_party/apple_apsl/`.
+We redistribute those upstream headers unchanged and impose no additional
+restrictions on their source rights. Keep the source, notices, and public source
+access with redistributions; the upstream license remains authoritative.
+
 ## Notice inventory
 
 `MANIFEST.json` records every required file here and its SHA-256 digest. Release
@@ -17,7 +28,7 @@ packaging verifies the inventory instead of silently omitting missing notices.
 | `WEZTERM-LICENSE` | The pinned Codex source's `third_party/wezterm/LICENSE`. |
 | `BUBBLEWRAP-LICENSE` | The pinned Codex source's `codex-rs/vendor/bubblewrap/LICENSE`, LGPL-2.0-or-later. Source and build scripts are in the accompanying Codex source. |
 | `LIBCAP-LICENSE`, `LIBCAP-COPYRIGHT.txt` | libcap 2.75's original license and its source copyright notices; the BSD-3-Clause option is used. Its source tarball is in the corresponding-source asset. |
-| `V8/` | Rusty V8 150.4.0, V8, and native third-party notices omitted from the Cargo crate's packaged license files. Exact source URLs and digests are in `V8/SOURCES.json`. |
+| `V8/` | Rusty V8 150.4.0, V8, native third-party, and corresponding-source build-tool notices omitted from the Cargo crate's packaged license files. Exact source URLs and digests are in `V8/SOURCES.json`. Includes Apple APSL headers, Jinja2, MarkupSafe, and Chromium build infrastructure. |
 | `RIPGREP-NOTICES.html` | ripgrep 15.2.0 and its Cargo dependencies, including the `pcre2` feature used by upstream release builds. The generation uses its release Cargo.lock, not Codex's lockfile. |
 | `PCRE2-LICENCE.md`, `JEMALLOC-COPYING` | Native PCRE2 10.45, its JIT/SLJIT support, and jemalloc notices in addition to the Rust wrapper licenses. |
 | `ZSH-LICENCE` | Zsh commit `77045ef899e53b9598bebc5a41db93a548a40ca6`, with Codex's execution-wrapper patch. Upstream packages use `codex-zsh-v0.1.0`. Only the core shell executable is distributed, not optional shell-function files. |
@@ -39,7 +50,12 @@ PartitionAlloc's split-repository commit
 `ff3b8b885b8374cbd3902642d94dc737bda93d5d` records Chromium origin
 `e2ee5821963baed92f29e830f05d257fbfdc6bdd`; its BSD license is copied from that
 exact origin. LLVM libraries' dual-license texts and exceptions, ICU data terms,
-and other V8 third-party notices remain intact.
+and other V8 third-party notices remain intact. The source inventory was checked
+against the exact recursive trees of all 20 Rusty V8 submodules, including
+applicable build/source-directory licenses and copyright/author records. Cargo's
+V8 source exclusions remove many such files, so vendor checksums alone are not
+a substitute for this supplement. Chromium split-tree notices record their
+original Chromium revision in `V8/SOURCES.json` where no root license was present.
 
 Additional notice source references:
 
@@ -146,8 +162,10 @@ V8_FROM_SOURCE=1 cargo +1.95.0 build --offline --locked --release \
 Cargo dependencies are available offline; native build scripts can still need
 build-tool downloads unless you supply their required tools. Rusty V8's
 `build.rs` supports explicit `GN`, `NINJA`, and `CLANG_BASE_PATH` overrides.
-The glibc-derived math implementation and its build definition are in
-`vendor-crates/v8-150.4.0/v8/third_party/glibc/`. To modify a checksummed vendored
+The glibc-derived math implementation is in
+`vendor-crates/v8-150.4.0/v8/third_party/glibc/`; its source list and build
+definition are in `vendor-crates/v8-150.4.0/v8/BUILD.gn`.
+To modify a checksummed vendored
 crate, copy it to a local development directory and use an appropriate Cargo
 path patch; otherwise Cargo correctly rejects changed vendor checksums. Rebuild
 and relink the dependent executables against that modified crate. Explicit
