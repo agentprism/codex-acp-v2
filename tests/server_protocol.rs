@@ -318,6 +318,54 @@ async fn resume_reconciles_full_settings_with_partial_lifecycle_responses() {
     client.shutdown().await;
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn resume_accepts_directory_aliases_without_allowing_a_different_workspace() {
+    let mut client = Client::start(true).await;
+    let id = client.new_session(Value::Null).await;
+    let paths = tempfile::tempdir().unwrap();
+    let alias = paths.path().join("workspace-alias");
+    std::os::unix::fs::symlink(client.directory.path(), &alias).unwrap();
+    client.rpc("session/close", json!({"sessionId":id})).await;
+
+    // Codex can retain a canonical cwd while clients use macOS /var aliases or
+    // Windows short names. Exercise that distinction through the public API.
+    client
+        .rpc(
+            "session/resume",
+            json!({"sessionId":id,"cwd":alias,"mcpServers":[]}),
+        )
+        .await;
+    for different in [paths.path().to_owned(), paths.path().join("missing")] {
+        let rejected = client
+            .request(
+                "session/resume",
+                json!({"sessionId":id,"cwd":different,"mcpServers":[]}),
+            )
+            .await;
+        assert_eq!(
+            rejected["error"],
+            json!({
+                "code":-32602,
+                "message":"Invalid params",
+                "data":"resume cwd must match the stored session cwd"
+            })
+        );
+    }
+    let backend = client
+        .rpc(
+            "_codex/request",
+            json!({"version":1,"sessionId":id,"method":"thread/read","params":{"threadId":id}}),
+        )
+        .await;
+    assert_eq!(
+        backend["thread"]["resumeParams"]["cwd"],
+        json!(alias),
+        "rejected working directories must not reach thread/resume"
+    );
+    client.shutdown().await;
+}
+
 #[tokio::test]
 async fn cancellation_racing_completion_keeps_the_connection_usable() {
     let mut client = Client::start(true).await;
