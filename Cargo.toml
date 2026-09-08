@@ -20,7 +20,7 @@ bundled-backend = []
 agent-client-protocol = { version = "=2.1.0", features = ["unstable_protocol_v2", "unstable_session_fork", "unstable_mcp_over_acp"] }
 anyhow = "1"
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
-base64 = "0.22"
+base64 = "0.23"
 blocking = "1"
 clap = { version = "4", features = ["derive", "env"] }
 futures = "0.3"
