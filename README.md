@@ -20,7 +20,7 @@ requires an ACP **v2** client; clients supporting only ACP v1 cannot connect.
 Download the **native executable** for your machine from
 [GitHub Releases](https://github.com/agentprism/codex-acp-v2/releases). Each is one
 self-extracting binary containing the adapter, complete pinned **Codex app-server
-0.153.3** runtime, helpers, notices, and build metadata. There is no install tarball
+0.153.4** runtime, helpers, notices, and build metadata. There is no install tarball
 to unpack and no backend download at startup. You do not need a separate Codex,
 Node.js, or Rust installation. Model access still requires your own configured
 provider/account.
@@ -51,12 +51,12 @@ For example, with the [GitHub CLI](https://cli.github.com/), download and verify
 the Apple Silicon executable:
 
 ```sh
-gh release download v0.2.0 --repo agentprism/codex-acp-v2 \
-  --pattern codex-acp-v2-v0.2.0-aarch64-apple-darwin \
+gh release download v0.2.1 --repo agentprism/codex-acp-v2 \
+  --pattern codex-acp-v2-v0.2.1-aarch64-apple-darwin \
   --pattern SHA256SUMS
-gh attestation verify codex-acp-v2-v0.2.0-aarch64-apple-darwin \
+gh attestation verify codex-acp-v2-v0.2.1-aarch64-apple-darwin \
   --repo agentprism/codex-acp-v2
-shasum -a 256 codex-acp-v2-v0.2.0-aarch64-apple-darwin
+shasum -a 256 codex-acp-v2-v0.2.1-aarch64-apple-darwin
 ```
 
 Compare the printed digest with that executable's entry in `SHA256SUMS`. On Linux
@@ -69,8 +69,8 @@ OS signature or proof that the software is free of vulnerabilities.
 After both checks succeed, make the Unix download executable:
 
 ```sh
-chmod +x codex-acp-v2-v0.2.0-aarch64-apple-darwin
-./codex-acp-v2-v0.2.0-aarch64-apple-darwin --help
+chmod +x codex-acp-v2-v0.2.1-aarch64-apple-darwin
+./codex-acp-v2-v0.2.1-aarch64-apple-darwin --help
 ```
 
 Give your ACP client the absolute path to the downloaded executable. You can
@@ -155,10 +155,10 @@ Useful limits are `--max-sessions` (64), `--request-timeout-seconds` (60),
 Resource exhaustion is an explicit error, not silent loss of protocol events.
 Use `--help` for the authoritative CLI options.
 
-The bundled backend is the unmodified upstream Codex `0.153.3` package from
-source revision `b1a547b1f73ce86205d9222ac19cff334b3b7a2e`. Its version, release
+The bundled backend is the unmodified upstream Codex `0.153.4` package from
+source revision `3d2ee51ca2d5db578f328aa75e20aa22c0197c9a`. Its version, release
 URLs, sizes, and SHA-256 digests are pinned independently of the adapter version.
-The bundled-default path has been exercised with a real Codex `0.153.3`
+The bundled-default path has been exercised with a real Codex `0.153.4`
 runtime and a local mock Responses endpoint for initialization, model discovery,
 command/file approvals and execution, dynamic callbacks, stdio/native MCP calls,
 child execution, durable root/child
@@ -246,6 +246,52 @@ state. Legacy SSE server declarations are not part of
 the pinned v2 surface. There are no ACP v1 filesystem or client terminal-execution
 RPCs.
 
+### MCP Apps
+
+Clients hosting [MCP Apps](https://modelcontextprotocol.io/extensions/apps/overview)
+can opt into Codex's MCP UI capability at launch:
+
+```sh
+codex-acp-v2 \
+  --backend-capabilities='{"extensions":{"io.modelcontextprotocol/ui":{"mimeTypes":["text/html;profile=mcp-app"]}}}'
+```
+
+The ACP client must negotiate `capabilities._meta.codex` with `version: 1` and
+`serverRequests: true`. Ordinary MCP transports do not require this UI opt-in.
+Use `_codex/request` for `mcpServerStatus/list`, `mcpServer/resource/read`,
+`mcpServer/tool/call`, and supported `mcpServer/event/stream/start` / `stop`
+operations. Include the owned `sessionId` and matching backend `threadId` for
+session-scoped calls. Resource reads without a thread require host authority.
+
+MCP tool updates preserve their backend binding in `_meta.codex.mcpToolCall`:
+
+```json
+{
+  "server": "codex_apps",
+  "tool": "weather",
+  "appContext": {
+    "connectorId": "weather-app",
+    "linkId": "weather-account",
+    "resourceUri": "ui://weather/dashboard.html",
+    "appName": "Weather",
+    "actionName": "Forecast"
+  }
+}
+```
+
+The metadata copies the backend's `server`, `tool`, `appContext`,
+`mcpAppResourceUri`, `pluginId`, and `readOnlyHint` fields when present, retaining
+explicit nulls. Prefer `appContext.resourceUri`; the older `mcpAppResourceUri`
+is available for backends or tools using that field. Live updates and replay,
+including descendant tool replay, carry the same binding. `rawInput` and
+`rawOutput` retain arguments and results separately, including result `_meta`.
+
+The ACP client implements the iframe/AppBridge host, resource rendering and CSP,
+permitted UI tool calls, and UI-to-conversation actions. The adapter does not
+render widgets or grant an iframe host authority. Enable the UI capability only
+for a client implementing that host contract. Generic ACP clients can ignore
+the metadata and continue rendering ordinary tool content.
+
 ## Configuration scope
 
 Standard configuration selectors expose model, supported reasoning effort,
@@ -260,6 +306,8 @@ and do not guarantee an initial full-settings notification. Until a mode is
 observed, its selector displays `Backend-managed`; selecting Default or Plan
 explicitly applies that preset. Same-connection resume preserves previously
 observed omitted settings while keeping newer response-covered fields authoritative.
+Selecting a preset asks Codex to load that mode's built-in instructions while
+preserving the current model and reasoning effort.
 
 After negotiating the Codex extension, creation/resume/fork requests may use
 `_meta.codex.thread` for explicitly accepted backend controls such as model

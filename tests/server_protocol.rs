@@ -318,6 +318,49 @@ async fn resume_reconciles_full_settings_with_partial_lifecycle_responses() {
     client.shutdown().await;
 }
 
+#[tokio::test]
+async fn mode_presets_replace_previous_instructions_and_preserve_model_settings() {
+    let mut client = Client::start(true).await;
+    let id = client.new_session(Value::Null).await;
+    client
+        .rpc(
+            "session/set_config_option",
+            json!({"sessionId":id,"configId":"effort","type":"id","value":"high"}),
+        )
+        .await;
+
+    for (mode, instructions) in [
+        ("plan", "Plan the work before making changes."),
+        (
+            "default",
+            "Carry the requested work through implementation.",
+        ),
+        ("plan", "Plan the work before making changes."),
+    ] {
+        let configured = client
+            .rpc(
+                "session/set_config_option",
+                json!({"sessionId":id,"configId":"mode","type":"id","value":mode}),
+            )
+            .await;
+        assert_eq!(current(&configured["configOptions"], "mode"), mode);
+        let backend = client
+            .rpc(
+                "_codex/request",
+                json!({"version":1,"sessionId":id,"method":"thread/read","params":{"threadId":id}}),
+            )
+            .await;
+        assert_eq!(
+            backend["observedSettings"]["collaborationMode"],
+            json!({"mode":mode,"settings":{
+                "model":"model-a","reasoning_effort":"high","developer_instructions":instructions
+            }}),
+            "selecting a mode must install its own instructions without changing model settings"
+        );
+    }
+    client.shutdown().await;
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn resume_accepts_directory_aliases_without_allowing_a_different_workspace() {

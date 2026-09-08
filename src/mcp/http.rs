@@ -185,6 +185,19 @@ async fn relay(endpoint: &Endpoint, frame: Value) -> Result<Option<Value>, Error
         return Ok(None);
     };
     let method = method.as_str().ok_or_else(Error::invalid_request)?;
+    if id.is_none() && method == "notifications/cancelled" {
+        if let Some(id) = frame.pointer("/params/requestId")
+            && let Some(cancel) = endpoint
+                .forward_pending
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get_mut(id)
+                .and_then(Option::take)
+        {
+            let _ = cancel.send(());
+        }
+        return Ok(None);
+    }
     let params = match frame.get("params") {
         Some(Value::Object(params)) => Some(params.clone()),
         None | Some(Value::Null) => None,
@@ -196,13 +209,7 @@ async fn relay(endpoint: &Endpoint, frame: Value) -> Result<Option<Value>, Error
         )?;
         return Ok(None);
     };
-    let mut shutdown = endpoint.shutdown.subscribe();
-    let response = tokio::select! {
-        response = tokio::time::timeout(endpoint.timeout,
-            endpoint.client.send_request(v2::MessageMcpRequest::new(endpoint.connection_id.clone(), method).params(params)).block_task()) =>
-            response.unwrap_or_else(|_| Err(Error::new(-32000,"native MCP request timed out"))),
-        _ = shutdown.wait_for(|closed| *closed) => Err(Error::new(-32800,"native MCP connection closed")),
-    };
+    let response = forward_request(endpoint, &id, method, params).await;
     let response = match response {
         Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),
         Err(error) => json!({"jsonrpc":"2.0","id":id,"error":error}),
@@ -213,6 +220,56 @@ async fn relay(endpoint: &Endpoint, frame: Value) -> Result<Option<Value>, Error
         ));
     }
     Ok(Some(response))
+}
+
+async fn forward_request(
+    endpoint: &Endpoint,
+    id: &Value,
+    method: &str,
+    params: Option<serde_json::Map<String, Value>>,
+) -> Result<v2::MessageMcpResponse, Error> {
+    let (cancel, cancelled) = tokio::sync::oneshot::channel();
+    let _pending = if method == "initialize" {
+        None
+    } else {
+        let mut pending = endpoint
+            .forward_pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if pending.contains_key(id) {
+            return Err(Error::invalid_request().data("duplicate native MCP request id"));
+        }
+        if pending.len() >= 32 {
+            return Err(Error::new(-32000, "too many native MCP forward requests"));
+        }
+        pending.insert(id.clone(), Some(cancel));
+        Some(ForwardPending { endpoint, id })
+    };
+    let mut shutdown = endpoint.shutdown.subscribe();
+    // Dropping block_task cancels the actual ACP request through the SDK,
+    // which owns its reissued ID. HTTP IDs never leave this endpoint's map.
+    tokio::select! {
+        response = tokio::time::timeout(endpoint.timeout,
+            endpoint.client.send_request(v2::MessageMcpRequest::new(endpoint.connection_id.clone(), method).params(params)).block_task()) =>
+            response.unwrap_or_else(|_| Err(Error::new(-32000,"native MCP request timed out"))),
+        Ok(()) = cancelled => Err(Error::request_cancelled()),
+        _ = shutdown.wait_for(|closed| *closed) => Err(Error::new(-32800,"native MCP connection closed")),
+    }
+}
+
+struct ForwardPending<'a> {
+    endpoint: &'a Endpoint,
+    id: &'a Value,
+}
+
+impl Drop for ForwardPending<'_> {
+    fn drop(&mut self) {
+        self.endpoint
+            .forward_pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(self.id);
+    }
 }
 
 async fn events(State(listener): State<Arc<Listener>>, headers: HeaderMap) -> Response {

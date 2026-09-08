@@ -251,14 +251,9 @@ impl Configuration {
                     matches!(value.as_str(), "default" | "plan"),
                     "backend-managed collaboration mode is display-only; choose a supported preset"
                 );
-                let instructions = self
-                    .settings
-                    .get("collaborationMode")
-                    .and_then(|mode| mode.pointer("/settings/developer_instructions"))
-                    .cloned()
-                    .unwrap_or(Value::Null);
+                // Null lets Codex resolve the selected preset's own instructions.
                 patch.insert("collaborationMode".into(), json!({"mode":value,"settings":{
-                    "model":self.string("model", "default"),"reasoning_effort":self.settings.get("effort"),"developer_instructions":instructions
+                    "model":self.string("model", "default"),"reasoning_effort":self.settings.get("effort"),"developer_instructions":null
                 }}));
             }
             _ => bail!("unknown session configuration option"),
