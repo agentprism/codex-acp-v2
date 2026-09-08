@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.2.1
+
+- Bundle Codex app-server 0.153.4 with updated source and package checksums,
+  matching notices, and corresponding sources. This upstream patch fixes Astra
+  model visibility/default selection and guidance for asynchronous questions;
+  the app-server protocol and external dependency lock entries are unchanged.
+- Preserve cancellation across native MCP-over-ACP request ID translation so
+  cancelling a backend MCP request reaches the matching client request.
+- Load the selected Plan or Default preset's own instructions when changing
+  collaboration mode, preserving the current model and reasoning effort.
+- Preserve MCP Apps binding metadata in `_meta.codex.mcpToolCall` on live and
+  replayed tool updates, including descendant tools. Keep result `_meta` intact
+  in `rawOutput` and document UI capability configuration and client hosting.
+- Add regression coverage for native MCP cancellation, repeated mode changes,
+  and MCP Apps metadata, resource/tool extension calls, and history replay.
+
+MCP Apps rendering and iframe permissions remain the client's responsibility.
+The known bundled dependency advisories in SECURITY.md continue to apply.
+
 ## 0.2.0
 
 - Bundle the complete pinned Codex app-server 0.153.3 runtime on all four release

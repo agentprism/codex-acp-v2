@@ -1,7 +1,7 @@
 use agent_client_protocol::schema::v2;
 use anyhow::{Context, Result};
 use base64::{Engine, engine::general_purpose::STANDARD};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use super::{required, rich_content, terminal_id, text};
 
@@ -100,6 +100,22 @@ pub(super) fn project(item: &Value, completed: bool) -> Result<Vec<v2::SessionUp
             update = update.locations(locations);
         }
         "mcpToolCall" => {
+            // Widget selection belongs beside the tool call, outside its arguments and result.
+            let binding: v2::Meta = [
+                "server",
+                "tool",
+                "appContext",
+                "mcpAppResourceUri",
+                "pluginId",
+                "readOnlyHint",
+            ]
+            .into_iter()
+            .filter_map(|key| item.get(key).map(|value| (key.to_owned(), value.clone())))
+            .collect();
+            update = update.meta(v2::Meta::from_iter([(
+                "codex".into(),
+                json!({"mcpToolCall":binding}),
+            )]));
             if let Some(result) = item.get("result").filter(|result| !result.is_null()) {
                 if let Some(blocks) = result["content"].as_array() {
                     for block in blocks {

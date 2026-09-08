@@ -17,6 +17,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 sys.stdin.reconfigure(encoding="utf-8")
 sys.stdout.reconfigure(encoding="utf-8")
 
+WIDGET_URI = "ui://workflow/echo.html"
+WIDGET_MIME = "text/html;profile=mcp-app"
+WIDGET_HTML = "<!doctype html><html><body><output>Workflow echo</output></body></html>"
+WIDGET_META = {"ui": {"csp": {"connectDomains": [], "resourceDomains": []}, "prefersBorder": True}}
+UI_CAPABILITY = {"mimeTypes": [WIDGET_MIME]}
+
 
 def mcp_peer():
     for line in sys.stdin:
@@ -25,13 +31,21 @@ def mcp_peer():
             continue
         method = request["method"]
         if method == "initialize":
-            result = {"protocolVersion": request["params"]["protocolVersion"], "capabilities": {"tools": {}}, "serverInfo": {"name": "workflow-mcp", "version": "1"}}
+            assert request["params"]["capabilities"]["extensions"]["io.modelcontextprotocol/ui"] == UI_CAPABILITY
+            result = {"protocolVersion": request["params"]["protocolVersion"], "capabilities": {"tools": {}, "resources": {}}, "serverInfo": {"name": "workflow-mcp", "version": "1"}}
         elif method == "tools/list":
-            result = {"tools": [{"name": "echo", "description": "Return a deterministic integration marker", "inputSchema": {"type": "object", "properties": {"value": {"type": "string"}}, "required": ["value"]}}]}
+            result = {"tools": [{"name": "echo", "description": "Return a deterministic integration marker", "inputSchema": {"type": "object", "properties": {"value": {"type": "string"}}, "required": ["value"]}, "annotations": {"readOnlyHint": True}, "_meta": {"ui": {"resourceUri": WIDGET_URI}}}]}
         elif method == "tools/call":
             assert request["params"]["name"] == "echo"
-            assert request["params"]["arguments"] == {"value": "from-codex"}
-            result = {"content": [{"type": "text", "text": "mcp-ok:from-codex"}], "structuredContent": {"received": "from-codex"}, "isError": False}
+            value = request["params"]["arguments"]["value"]
+            assert value in ("from-codex", "from-widget")
+            if value == "from-widget":
+                assert request["params"]["_meta"]["widgetInvocation"] == "refresh"
+                assert isinstance(request["params"]["_meta"]["threadId"], str)
+            result = {"content": [{"type": "text", "text": f"mcp-ok:{value}"}], "structuredContent": {"received": value}, "isError": False, "_meta": {"viewState": {"value": value, "privateMarker": "fixture-widget-only"}}}
+        elif method == "resources/read":
+            assert request["params"]["uri"] == WIDGET_URI
+            result = {"contents": [{"uri": WIDGET_URI, "mimeType": WIDGET_MIME, "text": WIDGET_HTML, "_meta": WIDGET_META}]}
         elif method in ("resources/list", "resources/templates/list"):
             result = {"resources" if method == "resources/list" else "resourceTemplates": []}
         elif method == "ping":
@@ -168,7 +182,8 @@ class Client:
         environment.pop("CODEX_PATH", None)
         environment.pop("CODEX_APP_SERVER_PATH", None)
         binary = str(Path(binary).resolve())
-        args = [binary, "--request-timeout-seconds", "20", "--interaction-timeout-seconds", "20"]
+        args = [binary, "--request-timeout-seconds", "20", "--interaction-timeout-seconds", "20",
+                "--backend-capabilities", json.dumps({"extensions": {"io.modelcontextprotocol/ui": UI_CAPABILITY}})]
         if codex_path is not None:
             args += ["--codex-path", codex_path]
         else:
@@ -338,6 +353,26 @@ def workflow(binary, codex_path=None):
             assert outputs["dynamic-ok"] == "dynamic-ok" and outputs["dynamic-error"] == "dynamic tool request failed", outputs
             assert '"received":"from-codex"' in outputs["mcp-fixture"], outputs
             assert '"received":"native-from-codex"' in outputs["native-mcp-fixture"], outputs
+            assert "fixture-widget-only" not in outputs["mcp-fixture"], outputs["mcp-fixture"]
+            widget = next(event for event in events if event.get("toolCallId") == "mcp-fixture" and event.get("status") == "completed")
+            assert widget["_meta"]["codex"]["mcpToolCall"] == {
+                "server": "workflow", "tool": "echo", "appContext": None,
+                "mcpAppResourceUri": WIDGET_URI, "pluginId": None, "readOnlyHint": True,
+            }, widget
+            assert widget["rawOutput"]["_meta"] == {"viewState": {"value": "from-codex", "privateMarker": "fixture-widget-only"}}, widget
+
+            def read_widget(tool):
+                binding = tool["_meta"]["codex"]["mcpToolCall"]
+                resource = client.rpc("_codex/request", {"version": 1, "sessionId": session, "method": "mcpServer/resource/read",
+                                      "params": {"threadId": session, "server": binding["server"], "uri": binding["mcpAppResourceUri"]}})
+                assert resource == {"originCallId": None, "contents": [{"uri": WIDGET_URI, "mimeType": WIDGET_MIME, "text": WIDGET_HTML, "_meta": WIDGET_META}]}, resource
+
+            inference_count = len(Model.requests)
+            read_widget(widget)
+            refreshed = client.rpc("_codex/request", {"version": 1, "sessionId": session, "method": "mcpServer/tool/call",
+                                   "params": {"threadId": session, "server": "workflow", "tool": "echo", "arguments": {"value": "from-widget"}, "_meta": {"widgetInvocation": "refresh"}}})
+            assert refreshed == {"content": [{"type": "text", "text": "mcp-ok:from-widget"}], "structuredContent": {"received": "from-widget"}, "isError": False, "_meta": {"viewState": {"value": "from-widget", "privateMarker": "fixture-widget-only"}}}, refreshed
+            assert len(Model.requests) == inference_count, "UI resource/tool requests must not run inference"
             live_ids = {event["toolCallId"] for event in events if event.get("sessionUpdate") == "tool_call_update"}
             assert any(item_id.startswith("codex-child:") and item_id.endswith(":child-exec") for item_id in live_ids), live_ids
             assert any("child-command-ok" in base64.b64decode(event.get("output", {}).get("data", "")).decode() for event in terminal), terminal
@@ -347,6 +382,10 @@ def workflow(binary, codex_path=None):
             client.rpc("session/resume", {"sessionId": session, "cwd": str(workspace), "mcpServers": mcp, "replayFrom": {"type": "start"}})
             replay_ids = {event["toolCallId"] for event in client.events[start:] if event.get("sessionUpdate") == "tool_call_update"}
             assert live_ids <= replay_ids, (live_ids, replay_ids)
+            replayed_widget = next(event for event in client.events[start:] if event.get("toolCallId") == "mcp-fixture")
+            assert replayed_widget == widget, replayed_widget
+            read_widget(replayed_widget)
+            assert len(Model.requests) == inference_count, "replay must not feed widget history back into inference"
             start = len(client.events)
             client.rpc("session/prompt", {"sessionId": session, "prompt": [{"type": "text", "text": "[workflow:error]"}]})
             failed = client.idle_since(start)
@@ -361,7 +400,7 @@ def workflow(binary, codex_path=None):
             client.rpc("session/close", {"sessionId": session})
             assert len(client.mcp_connections) >= 3 and set(client.mcp_connections) == set(client.mcp_disconnected), (client.mcp_connections, client.mcp_disconnected)
             client.shutdown()
-            print("Actual Codex: command/file approvals, execution, patch projection, dynamic success/error, stdio and native ACP MCP, child tools, durable root/child replay, provider diagnosis, cancellation: passed.")
+            print("Actual Codex: command/file approvals, execution, patch projection, dynamic success/error, stdio and native ACP MCP, MCP Apps binding/resource/UI tool, child tools, durable root/child/widget replay, provider diagnosis, cancellation: passed.")
         finally:
             Model.cancellation_done.set()
             if client.process.poll() is None:

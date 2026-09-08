@@ -132,7 +132,7 @@ def backend():
             reconnect.thread_id = http.thread_id
             reconnect.exercise()
             assert reconnect.session not in (http.session, child.session)
-            thread = {"id": f"thread-{index}", "cwd": params["cwd"], "status": {"type": "idle"}, "parentThreadId": None, "turns": [], "bridgeUrl": url}
+            thread = {"id": f"thread-{index}", "cwd": params["cwd"], "status": {"type": "idle"}, "parentThreadId": None, "turns": [], "bridgeUrl": url, "httpSession": http.session, "reconnectedHttpSession": reconnect.session}
             threads[thread["id"]] = thread
             result = {"thread": thread, "model": "test", "modelProvider": "test", "cwd": params["cwd"], "sandbox": {"type": "readOnly", "networkAccess": False}, "approvalPolicy": "on-request", "reasoningEffort": None}
         elif method == "thread/read":
@@ -173,6 +173,9 @@ def probe(binary):
     explicit_cancelled = False
     cancelled_http_request = None
     held_http_request = None
+    forward_requests = {}
+    forward_results = {}
+    forward_cancelled = set()
     def send(frame):
         process.stdin.write(json.dumps({"jsonrpc": "2.0", **frame}) + "\n")
         process.stdin.flush()
@@ -207,6 +210,11 @@ def probe(binary):
             elif params["method"] == "tools/list":
                 send({"id": message["id"], "result": {"tools": [{"name": "echo", "description": "Echo", "inputSchema": {"type": "object"}}]}})
             elif params["method"] == "tools/call":
+                name = params["params"].get("name", "")
+                if name.startswith("forward-"):
+                    assert name not in forward_requests, "duplicate HTTP request reached the provider"
+                    forward_requests[name] = message
+                    return
                 assert params["params"] == {"name": "echo", "arguments": {"value": "native-roundtrip"}}
                 key = f"reverse-{params['connectionId']}"
                 reverse[key] = message
@@ -225,8 +233,18 @@ def probe(binary):
             assert message["error"]["code"] == -32800, message
             explicit_cancelled = True
         elif method == "$/cancel_request":
-            assert params["requestId"] == pending_initialize_id, message
-            initialize_cancelled = True
+            if params["requestId"] == pending_initialize_id:
+                initialize_cancelled = True
+            else:
+                name = next((name for name, request in forward_requests.items() if request["id"] == params["requestId"]), None)
+                assert name in ("forward-parent", "forward-close"), message
+                assert name not in forward_cancelled, "request cancelled more than once"
+                forward_cancelled.add(name)
+                send({"id": params["requestId"], "error": {"code": -32800, "message": "provider cancelled"}})
+        elif "fixture_forward" in message:
+            result = message["fixture_forward"]
+            assert "error" not in result, result
+            forward_results[result["name"]] = result["response"]
         elif method == "_codex/event" and params["method"] == "fixture/reverseHeld":
             held = True
             held_http_request = params["params"]["requestId"]
@@ -246,6 +264,24 @@ def probe(binary):
     def await_disconnected(count):
         while len(disconnected) < count:
             handle(frame())
+    def start_forward(http, request_id, name):
+        def request():
+            try:
+                response = http.post({"jsonrpc": "2.0", "id": request_id, "method": "tools/call", "params": {"name": name, "arguments": {}}})
+                received.put({"fixture_forward": {"name": name, "response": response}})
+            except Exception as error:
+                received.put({"fixture_forward": {"name": name, "error": str(error)}})
+        worker = threading.Thread(target=request, daemon=True)
+        worker.start()
+        while name not in forward_requests:
+            handle(frame())
+        return worker
+    def finish_forward(worker, name):
+        while name not in forward_results:
+            handle(frame())
+        worker.join(timeout=1)
+        assert not worker.is_alive()
+        return forward_results[name]
     def assert_closed(url):
         parsed = urllib.parse.urlparse(url)
         # Windows retries refused loopback connections for about two seconds.
@@ -277,6 +313,30 @@ def probe(binary):
         assert unauthorized.getresponse().status == 404
         unauthorized.close()
         active_connection = connections[-1]
+        parent_http = HttpMcp(url)
+        parent_http.session = inspected["result"]["thread"]["httpSession"]
+        child_http = HttpMcp(url)
+        child_http.session = inspected["result"]["thread"]["reconnectedHttpSession"]
+        parent_request = start_forward(parent_http, 777, "forward-parent")
+        child_request = start_forward(child_http, 777, "forward-child")
+        string_request = start_forward(parent_http, "777", "forward-string")
+        assert forward_requests["forward-parent"]["id"] != 777
+        duplicate = parent_http.post({"jsonrpc": "2.0", "id": 777, "method": "tools/call", "params": {"name": "forward-parent", "arguments": {}}})
+        assert duplicate == {"jsonrpc": "2.0", "id": 777, "error": {"code": -32600, "message": "Invalid request", "data": "duplicate native MCP request id"}}, duplicate
+        for params in ({}, {"requestId": 999}, {"requestId": 1}, {"requestId": []}, "malformed"):
+            assert parent_http.post({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": params}) is None
+        for _ in range(2):
+            assert parent_http.post({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": 777}}) is None
+        while "forward-parent" not in forward_cancelled:
+            handle(frame())
+        assert finish_forward(parent_request, "forward-parent") == {"jsonrpc": "2.0", "id": 777, "error": {"code": -32800, "message": "Request cancelled"}}
+        for worker, name, request_id in ((child_request, "forward-child", 777), (string_request, "forward-string", "777")):
+            content = {"content": [{"type": "text", "text": name}]}
+            send({"id": forward_requests[name]["id"], "result": content})
+            assert finish_forward(worker, name) == {"jsonrpc": "2.0", "id": request_id, "result": content}
+        reused = start_forward(parent_http, 777, "forward-reused")
+        send({"id": forward_requests["forward-reused"]["id"], "error": {"code": -32055, "message": "intentional tool failure"}})
+        assert finish_forward(reused, "forward-reused") == {"jsonrpc": "2.0", "id": 777, "error": {"code": -32055, "message": "intentional tool failure"}}
         # Closed sessions must return capacity, not exhaust the listener after
         # enough provider failures. These connections intentionally have no SSE
         # consumer; one oversized notification forces explicit retirement.
@@ -303,6 +363,7 @@ def probe(binary):
         send({"id": "explicit-cancel", "method": "mcp/message", "params": {"connectionId": active_connection, "method": "sampling/createMessage", "params": {"hold": True}}})
         while not held:
             handle(frame())
+        forward_on_close = start_forward(parent_http, 777, "forward-close")
         send({"method": "$/cancel_request", "params": {"requestId": "explicit-cancel"}})
         while not explicit_cancelled or cancelled_http_request is None:
             handle(frame())
@@ -336,6 +397,9 @@ def probe(binary):
             handle(frame())
         while not initialize_cancelled:
             handle(frame())
+        while "forward-close" not in forward_cancelled:
+            handle(frame())
+        assert finish_forward(forward_on_close, "forward-close") == {"jsonrpc": "2.0", "id": 777, "error": {"code": -32800, "message": "native MCP connection closed"}}
         assert_closed(url)
         missing = rpc("mcp/message", {"connectionId": connections[-1], "method": "tools/list", "params": {}})
         assert missing["error"]["code"] == -32602, missing
@@ -347,7 +411,7 @@ def probe(binary):
         process.stdin.close()
         assert process.wait(timeout=8) == 0, f"adapter exited with status {process.returncode}"
         assert_closed(live_url)
-        print("native MCP full duplex, independent child/reconnect sessions, reverse-call cancellation and cleanup verified")
+        print("native MCP full duplex, independent child/reconnect sessions, forward/reverse cancellation and cleanup verified")
     finally:
         if process.poll() is None:
             process.kill()

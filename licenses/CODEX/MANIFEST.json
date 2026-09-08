@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "backendVersion": "0.153.3",
-  "backendCommit": "b1a547b1f73ce86205d9222ac19cff334b3b7a2e",
+  "backendVersion": "0.153.4",
+  "backendCommit": "3d2ee51ca2d5db578f328aa75e20aa22c0197c9a",
   "files": [
     {
       "path": ".gitattributes",
@@ -11,7 +11,7 @@
     {
       "path": "APP-SERVER-NOTICES.html",
       "size": 714518,
-      "sha256": "9563f9b78682eebeb5ee614947048885d5d5cb88df1862887182bb10c4a552cd"
+      "sha256": "4b35086cfb38ba73ff773831245391fe62977afe9528e6fd6c4707418df90b90"
     },
     {
       "path": "BUBBLEWRAP-LICENSE",
@@ -21,12 +21,12 @@
     {
       "path": "BWRAP-RUST-NOTICES.html",
       "size": 15080,
-      "sha256": "4e0c94f4924e4d8d0062084938357b9fae8227b632ceb844124be604562c0735"
+      "sha256": "e46d6d47797a7275ef3f4932ab9e2fb8fb56430331a7b4b12af5a13d99ec55fd"
     },
     {
       "path": "CODE-MODE-HOST-NOTICES.html",
       "size": 466851,
-      "sha256": "6995061f517d9dfc2663674817543d787eb47e1e9b074886c2c02fd1e2ead0ed"
+      "sha256": "724d4a2a8af5bfe77ae66877d75211ee1ce735eca75d03c54d3b207b2f859c5e"
     },
     {
       "path": "JEMALLOC-COPYING",
@@ -61,12 +61,12 @@
     {
       "path": "README.md",
       "size": 12484,
-      "sha256": "0d7a3755b0e91cf5e47d37222010186a017c83a573579d6fdb1a302aed62f14b"
+      "sha256": "f07b39759b3c21d58cd7d33e8a4f5e20cca045fa37d519ecc77e970d581c4c22"
     },
     {
       "path": "RIPGREP-NOTICES.html",
       "size": 26466,
-      "sha256": "11a27f735b1b28288aa8927a4d5338a0e4391f931e058f07dbcec696e4545298"
+      "sha256": "9263c9b0fb008e0fae4f693fbfd7dfbfeee62692290371b3e62bf693be5b9b7c"
     },
     {
       "path": "RIPGREP-RUST-NIGHTLY/COPYRIGHT-library.html",
@@ -541,7 +541,7 @@
     {
       "path": "WINDOWS-SANDBOX-NOTICES.html",
       "size": 428031,
-      "sha256": "cabf304b1f54949240697251ee4309b00b2ee26c0bb69f9d041c97c9c5d53ffb"
+      "sha256": "ca080b2045e100087b850b36a46aac904b055498b6b2d89c643b9272f1290b3d"
     },
     {
       "path": "ZSH-LICENCE",
@@ -551,7 +551,7 @@
     {
       "path": "about.hbs",
       "size": 917,
-      "sha256": "69f771bc862738ae711d2493fc289d1529f92c72eef963dc389268cd7ded5b1f"
+      "sha256": "fba7f4e04939dcb90a9d24f6985c29f2891de4eca5c187debdc8419649434eae"
     },
     {
       "path": "about.toml",

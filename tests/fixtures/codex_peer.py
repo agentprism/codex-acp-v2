@@ -200,6 +200,13 @@ for line in sys.stdin:
             reply(request, {})
         elif method == "thread/settings/update":
             previous_settings = dict(settings)
+            collaboration_mode = params.get("collaborationMode")
+            if collaboration_mode and collaboration_mode["settings"].get("developer_instructions") is None:
+                # Codex expands null instructions to the selected built-in preset.
+                collaboration_mode["settings"]["developer_instructions"] = {
+                    "plan": "Plan the work before making changes.",
+                    "default": "Carry the requested work through implementation.",
+                }[collaboration_mode["mode"]]
             settings.update({key: value for key, value in params.items() if key != "threadId"})
             if params.get("effort") == "high" and thread["creationParams"].get("config", {}).get("audit_defer_settings"):
                 pending_settings = True

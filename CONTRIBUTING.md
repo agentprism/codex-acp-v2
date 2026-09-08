@@ -80,8 +80,8 @@ to a package registry.
    tag. For example:
 
    ```sh
-   git tag -a v0.2.0 -m "Release v0.2.0"
-   git push origin v0.2.0
+   git tag -a v0.2.1 -m "Release v0.2.1"
+   git push origin v0.2.1
    ```
 
 4. Monitor the Release workflow. It validates the tag against the manifest and
@@ -108,7 +108,7 @@ not only the backend's `--version` output. Configured model providers and normal
 OS facilities remain external prerequisites; see README for the Linux helper
 requirements.
 
-The separate `codex-backend-sources-0.153.3.zip` release asset supplies the
+The separate `codex-backend-sources-0.153.4.zip` release asset supplies the
 upstream source, pinned vendored dependencies, V8 sources, libcap, build inputs,
 and notices for rebuilding/relinking the backend. It must be available with the
 same release and checksum/provenance checks as the native executables. It is

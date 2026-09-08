@@ -86,12 +86,12 @@ green dependency check as a clean bill of health for every bundled component.
 
 ## Bundled backend advisories
 
-Codex **0.153.3**, source `b1a547b1f73ce86205d9222ac19cff334b3b7a2e`, includes
+Codex **0.153.4**, source `3d2ee51ca2d5db578f328aa75e20aa22c0197c9a`, includes
 `hickory-proto 0.25.2` through its network proxy's Rama DNS dependencies.
 [RUSTSEC-2026-0119](https://rustsec.org/advisories/RUSTSEC-2026-0119.html)
 identifies excessive CPU work when encoding DNS messages containing many records;
 the fix is in Hickory 0.26.1. The pinned upstream
-[advisory policy](https://github.com/openai/codex/blob/b1a547b1f73ce86205d9222ac19cff334b3b7a2e/codex-rs/deny.toml#L83)
+[advisory policy](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/deny.toml#L83)
 accepts this dependency pending a Rama update. This release preserves the
 official backend unchanged; bundling does not fix that dependency.
 

@@ -1,13 +1,13 @@
 # Bundled Codex notices and corresponding source
 
-This directory accompanies the unmodified upstream Codex app-server **0.153.3**
-packages from `openai/codex`, tag `rust-v0.153.3`, source commit
-`b1a547b1f73ce86205d9222ac19cff334b3b7a2e`. The adapter's Apache-2.0 license does
+This directory accompanies the unmodified upstream Codex app-server **0.153.4**
+packages from `openai/codex`, tag `rust-v0.153.4`, source commit
+`3d2ee51ca2d5db578f328aa75e20aa22c0197c9a`. The adapter's Apache-2.0 license does
 not replace the licenses of these separately distributed components.
 
 Portions of the bundled V8/PartitionAlloc runtime contain Apple-covered code
 under **APSL-2.0**. Its source is available under that license in the matching
-`codex-backend-sources-0.153.3.zip` at
+`codex-backend-sources-0.153.4.zip` at
 <https://github.com/agentprism/codex-acp-v2/releases>, under
 `upstream/codex-rs/vendor-crates/v8-150.4.0/third_party/partition_alloc/src/partition_alloc/third_party/apple_apsl/`.
 The full license and upstream modification/origin record are preserved here in
@@ -59,7 +59,7 @@ original Chromium revision in `V8/SOURCES.json` where no root license was presen
 
 Additional notice source references:
 
-- Codex: `https://github.com/openai/codex/tree/b1a547b1f73ce86205d9222ac19cff334b3b7a2e`
+- Codex: `https://github.com/openai/codex/tree/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a`
 - libcap: `https://mirrors.edge.kernel.org/pub/linux/libs/security/linux-privs/libcap2/libcap-2.75.tar.xz`
   (SHA-256 `de4e7e064c9ba451d5234dd46e897d7c71c96a9ebf9a0c445bc04f4742d83632`).
 - PCRE2: `https://github.com/PCRE2Project/pcre2/blob/pcre2-10.45/LICENCE.md`.
@@ -77,10 +77,10 @@ Additional notice source references:
 
 Every embedded runtime carries `codex/SOURCE.tar.gz`, the exact upstream source
 archive, SHA-256
-`bdd4df80f52e9e831eec6fd892fc5c99cc04dc1214b545c2a2843edc9e43dbbe`.
+`bbbf66ffa30846f1e9bc3ae8a87a5aa0bb768efee8dbb94759dc9eb64bb4aa3a`.
 Run the downloaded adapter with `--extract-runtime` to print the runtime directory
 and inspect its notices and source archive without launching ACP or Codex.
-The same GitHub release also provides **`codex-backend-sources-0.153.3.zip`**:
+The same GitHub release also provides **`codex-backend-sources-0.153.4.zip`**:
 
 <https://github.com/agentprism/codex-acp-v2/releases>
 
@@ -93,7 +93,7 @@ Codex archive, pinned libcap source, build metadata, and this notice directory.
 This is source access for recipients, not an offer limited to maintainers.
 
 The only upstream lockfile normalization changes 149 local workspace package
-versions from `0.0.0` to `0.153.3`; the upstream release tag had left those
+versions from `0.0.0` to `0.153.4`; the upstream release tag had left those
 entries stale. All 1,232 external registry/git packages, checksums, revisions,
 and dependency entries remain unchanged. A Cargo source-replacement configuration
 is appended to the upstream `.cargo/config.toml`. The original, unmodified source

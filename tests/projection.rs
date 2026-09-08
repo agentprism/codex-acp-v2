@@ -217,6 +217,41 @@ fn renamed_files_and_child_tools_keep_the_same_structured_identity_during_replay
 }
 
 #[test]
+fn legacy_mcp_widget_binding_survives_child_projection_and_replay() -> Result<()> {
+    let mut projector = Projector::default();
+    let item = json!({
+        "type":"mcpToolCall", "id":"widget-call", "server":"weather", "tool":"forecast",
+        "status":"completed", "arguments":{"city":"Paris"}, "appContext":null,
+        "mcpAppResourceUri":"ui://weather/forecast.html", "pluginId":null,
+        "result":{"content":[{"type":"text","text":"20 C"}], "_meta":{"viewState":{"units":"C"}}}
+    });
+    let expected = json!([{
+        "sessionUpdate":"tool_call_update", "toolCallId":"codex-child:child-1:widget-call",
+        "title":"weather: forecast", "kind":"other", "status":"completed",
+        "content":[{"type":"content","content":{"type":"text","text":"20 C"}}],
+        "rawInput":{"city":"Paris"},
+        "rawOutput":{"content":[{"type":"text","text":"20 C"}], "_meta":{"viewState":{"units":"C"}}},
+        "_meta":{"codex":{"mcpToolCall":{
+            "server":"weather", "tool":"forecast", "appContext":null,
+            "mcpAppResourceUri":"ui://weather/forecast.html", "pluginId":null
+        }}}
+    }]);
+    assert_eq!(
+        serde_json::to_value(projector.project_child(
+            "item/completed",
+            &json!({"item":item}),
+            "child-1"
+        )?)?,
+        expected
+    );
+    assert_eq!(
+        serde_json::to_value(projector.replay_child_item(&item, "child-1")?)?,
+        expected
+    );
+    Ok(())
+}
+
+#[test]
 fn inline_images_and_web_results_have_renderable_content_without_fetching_resources() -> Result<()>
 {
     let mut projector = Projector::default();
